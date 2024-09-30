@@ -18,6 +18,9 @@ open class SirNominalType(
         if (this === other) return true
         if (other == null || other !is SirNominalType) return false
 
+        // Please consider special handling here if a SirNominalType's subtype with incompatible `equals` would appear.
+        // This may be required to preserve equals commutativity.
+
         if (typeDeclaration != other.typeDeclaration) return false
         if (typeArguments != other.typeArguments) return false
         if (parent != other.parent) return false
