@@ -127,7 +127,7 @@ open class Parent : KotlinRuntime.KotlinBase {
     }
     open var subtypeOptionalPrimitiveVar: Swift.Int32? {
         get {
-            return Parent_subtypeOptionalPrimitiveVar_get(self.__externalRCRef())?.int32Value
+            return Parent_subtypeOptionalPrimitiveVar_get(self.__externalRCRef()).map { it in it.int32Value }
         }
     }
     public override init() {
@@ -179,6 +179,6 @@ open class Parent : KotlinRuntime.KotlinBase {
         return switch Parent_subtypeOptionalObjectFunc(self.__externalRCRef()) { case 0: .none; case let res: overrides.Parent(__externalRCRef: res); }
     }
     open func subtypeOptionalPrimitiveFunc() -> Swift.Int32? {
-        return Parent_subtypeOptionalPrimitiveFunc(self.__externalRCRef())?.int32Value
+        return Parent_subtypeOptionalPrimitiveFunc(self.__externalRCRef()).map { it in it.int32Value }
     }
 }
