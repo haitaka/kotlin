@@ -163,9 +163,13 @@ PERFORMANCE_INLINE void gc::barriers::beforeHeapRefUpdate(mm::DirectRefAccessor 
 PERFORMANCE_INLINE void gc::barriers::afterSpecialRefReleaseToZero(mm::DirectRefAccessor ref) noexcept {
     auto phase = currentPhase();
     BarriersLogDebug(phase, "Write *%p <- NULL (%p overwritten)", ref.location(), ref.load());
+
+    // Can be called with any possible thread state: kotlin, native, unattached thread.
+    // This guard synchronizes with the `ConcurrentMark` via the ThreadRegistry lock.
+    // It must be done before the barriers phase check.
+    CalledFromNativeGuard guard(/*reentrant=*/true);
+
     if (__builtin_expect(phase == BarriersPhase::kMarkClosure, false)) {
-        // Can be called both from native code and from Kotlin code.
-        CalledFromNativeGuard guard(/*reentrant=*/true);
         beforeHeapRefUpdateSlowPath(ref, nullptr, true);
     }
 }
