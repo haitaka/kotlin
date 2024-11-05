@@ -171,6 +171,8 @@ class SpecialRefRegistry : private Pinned {
                 while (true) {
                     std::optional<gc::barriers::SpecialRefReleaseGuard> guard;
                     if (rcBefore == 1) {
+                        // The guard is only required in case of the last reference release (0->1).
+                        // We avoid it in all other cases, as the guard can be quite an overhead: e.g. taking the GC lock.
                         guard = gc::barriers::SpecialRefReleaseGuard{mm::DirectRefAccessor{obj_}};
                     }
                     if (rc_.compare_exchange_strong(rcBefore, rcBefore - 1, std::memory_order_relaxed)) break;
