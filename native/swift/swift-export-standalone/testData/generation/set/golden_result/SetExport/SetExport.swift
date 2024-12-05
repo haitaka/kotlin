@@ -4,7 +4,7 @@ import KotlinRuntime
 public func testOptSetInt(
     s: Swift.Set<Swift.Int32>?
 ) -> Swift.Set<Swift.Int32>? {
-    return __root___testOptSetInt__TypesOfArguments__Swift_Set_Swift_Int32__opt___(s.map { it in Set(it.map { it in NSNumber(value: it) }) } ?? .none).map { it in it as! Swift.Set<Swift.Int32> }
+    return __root___testOptSetInt__TypesOfArguments__Swift_Set_Swift_Int32__opt___(s.map { it in Set(it.map { it in NSNumber(value: it) }) } ?? nil).map { it in it as! Swift.Set<Swift.Int32> }
 }
 public func testSetAny(
     s: Swift.Set<KotlinRuntime.KotlinBase>
@@ -29,27 +29,27 @@ public func testSetNothing(
 public func testSetOptAny(
     s: Swift.Set<Swift.Optional<KotlinRuntime.KotlinBase>>
 ) -> Swift.Set<Swift.Optional<KotlinRuntime.KotlinBase>> {
-    return __root___testSetOptAny__TypesOfArguments__Swift_Set_Swift_Optional_KotlinRuntime_KotlinBase____(Set(s.map { it in (it).map { it in it as NSObject } ?? NSNull() })) as! Swift.Set<Swift.Optional<KotlinRuntime.KotlinBase>>
+    return __root___testSetOptAny__TypesOfArguments__Swift_Set_Swift_Optional_KotlinRuntime_KotlinBase____(Set(s.map { it in it as NSObject? ?? NSNull() })) as! Swift.Set<Swift.Optional<KotlinRuntime.KotlinBase>>
 }
 public func testSetOptInt(
     s: Swift.Set<Swift.Optional<Swift.Int32>>
 ) -> Swift.Set<Swift.Optional<Swift.Int32>> {
-    return __root___testSetOptInt__TypesOfArguments__Swift_Set_Swift_Optional_Swift_Int32____(Set(s.map { it in (it).map { it in it as NSObject } ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.Int32>>
+    return __root___testSetOptInt__TypesOfArguments__Swift_Set_Swift_Optional_Swift_Int32____(Set(s.map { it in it as NSObject? ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.Int32>>
 }
 public func testSetOptNothing(
     s: Swift.Set<Swift.Optional<Swift.Never>>
 ) -> Swift.Set<Swift.Optional<Swift.Never>> {
-    return __root___testSetOptNothing__TypesOfArguments__Swift_Set_Swift_Optional_Swift_Never____(Set(s.map { it in (it).map { it in it as NSObject } ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.Never>>
+    return __root___testSetOptNothing__TypesOfArguments__Swift_Set_Swift_Optional_Swift_Never____(Set(s.map { it in it as NSObject? ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.Never>>
 }
 public func testSetOptSetInt(
     s: Swift.Set<Swift.Optional<Swift.Set<Swift.Int32>>>
 ) -> Swift.Set<Swift.Optional<Swift.Set<Swift.Int32>>> {
-    return __root___testSetOptSetInt__TypesOfArguments__Swift_Set_Swift_Optional_Swift_Set_Swift_Int32_____(Set(s.map { it in (it).map { it in it as NSObject } ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.Set<Swift.Int32>>>
+    return __root___testSetOptSetInt__TypesOfArguments__Swift_Set_Swift_Optional_Swift_Set_Swift_Int32_____(Set(s.map { it in it as NSObject? ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.Set<Swift.Int32>>>
 }
 public func testSetOptString(
     s: Swift.Set<Swift.Optional<Swift.String>>
 ) -> Swift.Set<Swift.Optional<Swift.String>> {
-    return __root___testSetOptString__TypesOfArguments__Swift_Set_Swift_Optional_Swift_String____(Set(s.map { it in (it).map { it in it as NSObject } ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.String>>
+    return __root___testSetOptString__TypesOfArguments__Swift_Set_Swift_Optional_Swift_String____(Set(s.map { it in it as NSObject? ?? NSNull() })) as! Swift.Set<Swift.Optional<Swift.String>>
 }
 public func testSetSetInt(
     s: Swift.Set<Swift.Set<Swift.Int32>>

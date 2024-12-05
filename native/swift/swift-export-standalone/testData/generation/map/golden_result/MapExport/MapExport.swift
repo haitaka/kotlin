@@ -24,17 +24,17 @@ public func testMapLongAny(
 public func testMapNothingOptNothing(
     m: [Swift.Never: Swift.Never?]
 ) -> [Swift.Never: Swift.Never?] {
-    return __root___testMapNothingOptNothing__TypesOfArguments__Swift_Dictionary_Swift_Never_Swift_Optional_Swift_Never____(Dictionary(uniqueKeysWithValues: m.map { key, value in (key, (value).map { it in it as NSObject } ?? NSNull() )})) as! Swift.Dictionary<Swift.Never,Swift.Optional<Swift.Never>>
+    return __root___testMapNothingOptNothing__TypesOfArguments__Swift_Dictionary_Swift_Never_Swift_Optional_Swift_Never____(Dictionary(uniqueKeysWithValues: m.map { key, value in (key, value as NSObject? ?? NSNull() )})) as! Swift.Dictionary<Swift.Never,Swift.Optional<Swift.Never>>
 }
 public func testMapOptIntListInt(
     m: [Swift.Int32?: [Swift.Int32]]
 ) -> [Swift.Int32?: [Swift.Int32]] {
-    return __root___testMapOptIntListInt__TypesOfArguments__Swift_Dictionary_Swift_Optional_Swift_Int32__Swift_Array_Swift_Int32____(Dictionary(uniqueKeysWithValues: m.map { key, value in ((key).map { it in it as NSObject } ?? NSNull(), value.map { it in NSNumber(value: it) } )})) as! Swift.Dictionary<Swift.Optional<Swift.Int32>,Swift.Array<Swift.Int32>>
+    return __root___testMapOptIntListInt__TypesOfArguments__Swift_Dictionary_Swift_Optional_Swift_Int32__Swift_Array_Swift_Int32____(Dictionary(uniqueKeysWithValues: m.map { key, value in (key as NSObject? ?? NSNull(), value.map { it in NSNumber(value: it) } )})) as! Swift.Dictionary<Swift.Optional<Swift.Int32>,Swift.Array<Swift.Int32>>
 }
 public func testMapOptNothingNothing(
     m: [Swift.Never?: Swift.Never]
 ) -> [Swift.Never?: Swift.Never] {
-    return __root___testMapOptNothingNothing__TypesOfArguments__Swift_Dictionary_Swift_Optional_Swift_Never__Swift_Never___(Dictionary(uniqueKeysWithValues: m.map { key, value in ((key).map { it in it as NSObject } ?? NSNull(), value )})) as! Swift.Dictionary<Swift.Optional<Swift.Never>,Swift.Never>
+    return __root___testMapOptNothingNothing__TypesOfArguments__Swift_Dictionary_Swift_Optional_Swift_Never__Swift_Never___(Dictionary(uniqueKeysWithValues: m.map { key, value in (key as NSObject? ?? NSNull(), value )})) as! Swift.Dictionary<Swift.Optional<Swift.Never>,Swift.Never>
 }
 public func testMapSetIntMapIntInt(
     m: [Swift.Set<Swift.Int32>: [Swift.Int32: Swift.Int32]]

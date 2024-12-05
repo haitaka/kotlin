@@ -574,7 +574,7 @@ private sealed class Bridge(
         }
 
         override val inSwiftSources: InSwiftSourcesConversion = object : NilableIdentityValueConversion {
-            override fun renderNil(): String = ".none"
+            override fun renderNil(): String = "nil"
         }
     }
 
@@ -587,7 +587,8 @@ private sealed class Bridge(
             override fun renderNil(): String = "NSNull()"
 
             override fun swiftToKotlin(typeNamer: SirTypeNamer, valueExpression: String): String {
-                return "($valueExpression).map { it in it as NSObject } ?? ${renderNil()}"
+                return "$valueExpression as NSObject? ?? ${renderNil()}"
+                //return "($valueExpression).map { it in it as NSObject } ?? ${renderNil()}"
             }
 
             override fun kotlinToSwift(typeNamer: SirTypeNamer, valueExpression: String): String = valueExpression
