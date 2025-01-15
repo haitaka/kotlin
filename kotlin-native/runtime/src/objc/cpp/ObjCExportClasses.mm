@@ -189,6 +189,10 @@ extern "C" OBJ_GETTER(Kotlin_toString, KRef obj);
         RuntimeAssert(
                 [bestFittingClass isSubclassOfClass:[self class]], "Best-fitting class is %s which is not a subclass of self (%s)",
                 class_getName(bestFittingClass), class_getName([self class]));
+
+        // Release old self
+        [self releaseAsAssociatedObject];
+
         // Rerun the entire initializer, but with the best-fitting class now.
         return [[bestFittingClass alloc] initWithExternalRCRef:ref];
     }
