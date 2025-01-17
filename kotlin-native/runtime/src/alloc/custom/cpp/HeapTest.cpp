@@ -76,4 +76,22 @@ TEST_F(CustomAllocatorTest, HeapReuseNextFitPages) {
     EXPECT_EQ(page, heap.GetNextFitPage(0, finalizerQueue()));
 }
 
+TEST_F(CustomAllocatorTest, TraverseAllocatedExtraObjects) {
+    Heap heap;
+    FixedBlockPage* page = heap.GetExtraObjectPage(finalizerQueue());
+
+    std::vector<kotlin::mm::ExtraObjectData*> allocatedExtraObjects;
+
+    while (kotlin::alloc::ExtraObjectCell* cell = allocExtraObjectCell(page)) {
+        allocatedExtraObjects.push_back(cell->Data());
+    }
+
+    std::vector<kotlin::mm::ExtraObjectData*> foundExtraObjects;
+    heap.TraverseAllocatedExtraObjects([&](kotlin::mm::ExtraObjectData* extraObject){
+        foundExtraObjects.push_back(extraObject);
+    });
+
+    EXPECT_THAT(foundExtraObjects, testing::ElementsAreArray(allocatedExtraObjects));
+}
+
 } // namespace

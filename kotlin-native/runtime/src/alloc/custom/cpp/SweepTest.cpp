@@ -24,23 +24,6 @@ using SingleObjectPage = typename kotlin::alloc::SingleObjectPage;
 using AllocationSize = typename kotlin::alloc::AllocationSize;
 using ExtraObjectCell = typename kotlin::alloc::ExtraObjectCell;
 
-constexpr auto kExtraObjCellSize = AllocationSize::bytesExactly(sizeof(kotlin::alloc::ExtraObjectCell));
-
-ExtraObjectCell* initExtraObjectCell(uint8_t* ptr) {
-    EXPECT_TRUE(ptr[0] == 0 && memcmp(ptr, ptr + 1, kExtraObjCellSize.inBytes() - 1) == 0);
-    auto* extraObjCell = new(ptr) ExtraObjectCell();
-    new(extraObjCell->data_) kotlin::mm::ExtraObjectData(nullptr, nullptr);
-    return extraObjCell;
-}
-
-ExtraObjectCell* allocExtraObjectCell(FixedBlockPage* page) {
-    uint8_t* ptr = page->TryAllocate();
-    if (ptr) {
-        return initExtraObjectCell(ptr);
-    }
-    return nullptr;
-}
-
 } // namespace
 
 TEST_F(CustomAllocatorTest, ExtraDataSweepFullFinalizedPage) {

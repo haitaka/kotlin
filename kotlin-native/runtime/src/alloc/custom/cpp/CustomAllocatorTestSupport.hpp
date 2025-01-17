@@ -13,6 +13,7 @@
 #include "AllocatedSizeTracker.hpp"
 #include "AllocationSize.hpp"
 #include "CustomFinalizerProcessor.hpp"
+#include "FixedBlockPage.hpp"
 #include "GCStatistics.hpp"
 
 namespace kotlin::alloc::test_support {
@@ -80,5 +81,10 @@ public:
 private:
     testing::StrictMock<testing::MockFunction<void(std::size_t)>> schedulerNotificationHook_;
 };
+
+constexpr auto kExtraObjCellSize = AllocationSize::bytesExactly(sizeof(kotlin::alloc::ExtraObjectCell));
+
+ExtraObjectCell* initExtraObjectCell(uint8_t* ptr);
+ExtraObjectCell* allocExtraObjectCell(kotlin::alloc::FixedBlockPage* page);
 
 }

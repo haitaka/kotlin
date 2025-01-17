@@ -71,7 +71,7 @@ public:
     void TraverseAllocatedExtraObjects(T process) noexcept(noexcept(process(std::declval<kotlin::mm::ExtraObjectData*>()))) {
         extraObjectPages_.TraversePages([process](auto *page) {
             page->TraverseAllocatedBlocks([process](uint8_t* block) {
-                process(reinterpret_cast<mm::ExtraObjectData*>(block));
+                process(reinterpret_cast<ExtraObjectCell*>(block)->Data());
             });
         });
     }
