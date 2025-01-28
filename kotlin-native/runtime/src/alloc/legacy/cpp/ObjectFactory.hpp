@@ -531,6 +531,7 @@ public:
         ThreadQueue(ObjectFactory& owner, Allocator allocator) noexcept : producer_(owner.storage_, std::move(allocator)) {}
 
         ObjHeader* CreateObject(const TypeInfo* typeInfo) noexcept {
+            AssertThreadState(ThreadState::kRunnable);
             RuntimeAssert(!typeInfo->IsArray(), "Must not be an array");
             auto descriptor = HeapObject::descriptorFrom(typeInfo);
             auto& heapObject = *descriptor.construct(producer_.Insert(descriptor.size()).Data());
@@ -541,6 +542,7 @@ public:
         }
 
         ArrayHeader* CreateArray(const TypeInfo* typeInfo, uint32_t count) noexcept {
+            AssertThreadState(ThreadState::kRunnable);
             RuntimeAssert(typeInfo->IsArray(), "Must be an array");
             auto descriptor = HeapArray::descriptorFrom(typeInfo, count);
             auto& heapArray = *descriptor.construct(producer_.Insert(descriptor.size()).Data());
