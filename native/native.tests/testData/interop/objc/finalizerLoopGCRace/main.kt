@@ -2,21 +2,7 @@
 import kotlin.native.runtime.GC
 import cinterop.*
 
-class ItemWithDict(val dict: Map<String, Any>) {}
-
-fun getItemsWithDict(): List<ItemWithDict> {
-    val items = mutableListOf<ItemWithDict>()
-    for (i in 1..10000) {
-        val properties = mapOf(
-            "key1" to "value${i}",
-            "key2" to "value${i}",
-            "key3" to "value${i}",
-            "key4" to "value${i}",
-        )
-        items.add(ItemWithDict(dict = properties))
-    }
-    return items
-}
+// inspired by KT-73947
 
 fun produce(): List<Any> {
     return List(100_000) { Any() }
