@@ -33,6 +33,7 @@
 #import "Natives.h"
 #import "TypeInfoObjCExportAddition.hpp"
 #import "WritableTypeInfo.hpp"
+#import "ObjCRttiBuilder.h"
 
 using namespace kotlin;
 
@@ -193,22 +194,6 @@ static const ObjCTypeAdapter* getTypeAdapter(const TypeInfo* typeInfo) {
   return objCExport(typeInfo).typeAdapter;
 }
 
-static void addProtocolForAdapter(Class clazz, const ObjCTypeAdapter* protocolAdapter) {
-  Protocol* protocol = objc_getProtocol(protocolAdapter->objCName);
-  if (protocol != nullptr) {
-    class_addProtocol(clazz, protocol);
-    class_addProtocol(object_getClass(clazz), protocol);
-  } else {
-    // TODO: construct the protocol in compiler instead, because this case can't be handled easily.
-  }
-}
-
-static void addProtocolForInterface(Class clazz, const TypeInfo* interfaceInfo) {
-  const ObjCTypeAdapter* protocolAdapter = getTypeAdapter(interfaceInfo);
-  if (protocolAdapter != nullptr) {
-    addProtocolForAdapter(clazz, protocolAdapter);
-  }
-}
 
 extern "C" const TypeInfo* Kotlin_ObjCInterop_getTypeInfoForClass(Class clazz) {
   const TypeInfo* candidate = Kotlin_ObjCExport_getAssociatedTypeInfo(clazz);
@@ -257,24 +242,16 @@ extern "C" void Kotlin_ObjCExport_initializeClass(Class clazz) {
     setAssociatedTypeInfo(clazz, typeInfo);
   }
 
-  for (int i = 0; i < typeAdapter->directAdapterNum; ++i) {
-    const ObjCToKotlinMethodAdapter* adapter = typeAdapter->directAdapters + i;
-    SEL selector = sel_registerName(adapter->selector);
-    class_addMethod(clazz, selector, adapter->imp, adapter->encoding);
-    // The method above may fail if there is a matching Swift/Obj-C extension method for this Kotlin class.
-    // This is pretty much ok, and we shouldn't replace that method with our own.
-  }
+  ObjCClassBuilder classBuilder(typeInfo, clazz);
 
-  for (int i = 0; i < typeAdapter->classAdapterNum; ++i) {
-    const ObjCToKotlinMethodAdapter* adapter = typeAdapter->classAdapters + i;
-    SEL selector = sel_registerName(adapter->selector);
-    class_addMethod(object_getClass(clazz), selector, adapter->imp, adapter->encoding);
-  }
+  classBuilder.addDirectAdapter(typeAdapter);
+
+  classBuilder.addClassAdapters(typeAdapter);
 
   if (isClassForPackage) return;
 
   for (int i = 0; i < typeInfo->implementedInterfacesCount_; ++i) {
-    addProtocolForInterface(clazz, typeInfo->implementedInterfaces_[i]);
+    classBuilder.addProtocolForInterface(typeInfo->implementedInterfaces_[i]);
   }
 
 }
@@ -960,69 +937,6 @@ const TypeInfo* Kotlin_ObjCExport_createTypeInfoWithKotlinFieldsFrom(Class clazz
 }
 
 static kotlin::ThreadStateAware<kotlin::SpinLock> classCreationMutex;
-static int anonymousClassNextId = 0;
-
-static void addVirtualAdapters(Class clazz, const ObjCTypeAdapter* typeAdapter) {
-  for (int i = 0; i < typeAdapter->virtualAdapterNum; ++i) {
-    const ObjCToKotlinMethodAdapter* adapter = typeAdapter->virtualAdapters + i;
-    SEL selector = sel_registerName(adapter->selector);
-
-    class_addMethod(clazz, selector, adapter->imp, adapter->encoding);
-  }
-}
-
-static Class createClass(const TypeInfo* typeInfo, Class superClass) {
-  RuntimeAssert(typeInfo->superType_ != nullptr, "");
-  RuntimeAssert(!compiler::swiftExport(), "Not available with Swift Export");
-
-  kotlin::NativeOrUnregisteredThreadGuard threadStateGuard(/* reentrant = */ true);
-
-  int classIndex = (anonymousClassNextId++);
-  std::string className = Kotlin_ObjCInterop_getUniquePrefix();
-  className += "_kobjcc";
-  className += std::to_string(classIndex);
-
-  Class result = objc_allocateClassPair(superClass, className.c_str(), 0);
-  RuntimeCheck(result != nullptr, "");
-
-  // TODO: optimize by adding virtual adapters only for overridden methods.
-
-  if (getTypeAdapter(typeInfo->superType_) == nullptr) {
-    // class for super type is also synthesized, no need to add class adapters;
-  } else {
-    for (const TypeInfo* superType = typeInfo->superType_; superType != nullptr; superType = superType->superType_) {
-      const ObjCTypeAdapter* typeAdapter = getTypeAdapter(superType);
-      if (typeAdapter != nullptr) {
-        addVirtualAdapters(result, typeAdapter);
-      }
-    }
-  }
-
-  std::unordered_set<const TypeInfo*> superImplementedInterfaces(
-          typeInfo->superType_->implementedInterfaces_,
-          typeInfo->superType_->implementedInterfaces_ + typeInfo->superType_->implementedInterfacesCount_
-  );
-
-  for (int i = 0; i < typeInfo->implementedInterfacesCount_; ++i) {
-    const TypeInfo* interface = typeInfo->implementedInterfaces_[i];
-    const ObjCTypeAdapter* typeAdapter = getTypeAdapter(interface);
-    if (typeAdapter != nullptr) {
-      // Note: we could avoid adding virtual adapters if inherited from super type,
-      // but what's the point?
-      addVirtualAdapters(result, typeAdapter);
-      if (superImplementedInterfaces.find(interface) == superImplementedInterfaces.end()) {
-        addProtocolForAdapter(result, typeAdapter);
-      }
-    }
-  }
-
-  objc_registerClassPair(result);
-
-  // TODO: it will probably never be requested, since such a class can't be instantiated in Objective-C.
-  setAssociatedTypeInfo(result, typeInfo);
-
-  return result;
-}
 
 static void setClassEnsureInitialized(const TypeInfo* typeInfo, Class cls) {
   RuntimeAssert(cls != nullptr, "");
@@ -1055,7 +969,9 @@ static Class getOrCreateClass(const TypeInfo* typeInfo) {
 
     result = objCExport(typeInfo).objCClass; // double-checking.
     if (result == nullptr) {
-        result = createClass(typeInfo, superClass);
+        ObjCClassBuilder classBuilder(typeInfo);
+        result = classBuilder.create(superClass);
+        // TODO consider moving inside builder
         // Don't have to be a release store –
         // the operations above are synchronized and thus might not be reordered after this store.
         setClassEnsureInitialized(typeInfo, result);

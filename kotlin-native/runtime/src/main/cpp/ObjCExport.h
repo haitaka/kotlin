@@ -95,6 +95,10 @@ inline static OBJ_GETTER(AllocInstanceWithAssociatedObject, const TypeInfo* type
   return result;
 }
 
+// FIXME move somewhere?
+static const ObjCTypeAdapter* getTypeAdapter(const TypeInfo* typeInfo);
+static void setAssociatedTypeInfo(Class clazz, const TypeInfo* typeInfo);
+
 #endif // KONAN_OBJC_INTEROP
 
 #endif // RUNTIME_OBJCEXPORT_H
