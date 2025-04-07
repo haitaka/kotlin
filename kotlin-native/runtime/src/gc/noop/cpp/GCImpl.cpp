@@ -90,3 +90,7 @@ ALWAYS_INLINE gc::GC::ObjectData* type_layout::descriptor<gc::GC::ObjectData>::t
 }
 
 void gc::GC::onEpochFinalized(int64_t epoch) noexcept {}
+
+void gc::GC::registerMarkFun(void (*)(void*, void*)) noexcept {
+    RuntimeFail("Not implemented");
+}

@@ -414,6 +414,7 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
             GC.NOOP -> add("noop_gc.bc")
             GC.PARALLEL_MARK_CONCURRENT_SWEEP -> add("pmcs_gc.bc")
             GC.CONCURRENT_MARK_AND_SWEEP -> add("concurrent_ms_gc.bc")
+            GC.EXPERIMENTAL -> add("experimental_gc.bc")
         }
         if (target.supportsCoreSymbolication()) {
             add("source_info_core_symbolication.bc")

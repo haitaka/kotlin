@@ -5,6 +5,7 @@
 
 package kotlin.native.runtime
 
+import kotlinx.cinterop.*
 import kotlin.native.internal.escapeAnalysis.Escapes
 import kotlin.time.*
 import kotlin.time.Duration.Companion.microseconds
@@ -413,4 +414,9 @@ public object GC {
     @GCUnsafeCall("Kotlin_native_internal_GC_setPauseOnTargetHeapOverflow")
     @Escapes.Nothing
     private external fun setPauseOnTargetHeapOverflow(value: Boolean)
+
+    @ExperimentalForeignApi
+    @GCUnsafeCall("Kotlin_native_runtime_GC_registerMarkFun")
+    @Escapes.Nothing
+    public external fun registerMarkFun(mark: CPointer<CFunction<(COpaquePointer?, COpaquePointer?) -> Unit>>)
 }

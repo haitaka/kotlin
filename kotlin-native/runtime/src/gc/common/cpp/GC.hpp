@@ -83,6 +83,8 @@ public:
 
     void onEpochFinalized(int64_t epoch) noexcept;
 
+    void registerMarkFun(void(*)(void*, void*)) noexcept;
+
 private:
     std::unique_ptr<Impl> impl_;
     ThreadStateAware<std::mutex> gcLock_{};

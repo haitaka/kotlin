@@ -234,6 +234,11 @@ extern "C" void Kotlin_native_internal_GC_collect(ObjHeader*) {
     mm::GlobalData::Instance().gcScheduler().scheduleAndWaitFinalized();
 }
 
+extern "C" void Kotlin_native_runtime_GC_registerMarkFun(void(*mark)(void*, void*)) {
+    RuntimeLogDebug({kTagGC}, "Registering mark fun %p", mark);
+    mm::GlobalData::Instance().gc().registerMarkFun(mark);
+}
+
 extern "C" void Kotlin_native_internal_GC_schedule(ObjHeader*) {
     mm::GlobalData::Instance().gcScheduler().schedule();
 }

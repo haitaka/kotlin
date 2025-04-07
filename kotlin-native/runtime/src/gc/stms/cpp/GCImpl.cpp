@@ -105,3 +105,7 @@ void gc::GC::onEpochFinalized(int64_t epoch) noexcept {
     GCHandle::getByEpoch(epoch).finalizersDone();
     impl_->state_.finalized(epoch);
 }
+
+void gc::GC::registerMarkFun(void (*)(void*, void*)) noexcept {
+    RuntimeFail("Not implemented");
+}
