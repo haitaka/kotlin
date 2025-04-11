@@ -220,7 +220,7 @@ def run_command(command: List[str], dry_run):
 
     Note that on Windows we prepare environment with vsdevcmd.bat.
     """
-    env = os.environ
+    env = os.environ.copy()
     if host_is_windows():
         if vsdevcmd is None:
             sys.exit("'VsDevCmd.bat' is not set!")
