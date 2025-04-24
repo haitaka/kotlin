@@ -9,6 +9,11 @@ import kotlin.native.internal.IntrinsicType
 import kotlin.native.internal.TypedIntrinsic
 import kotlin.native.internal.ref.*
 import kotlinx.cinterop.*
+import kotlin.native.internal.ExportForCppRuntime
+
+@ThreadLocal
+@ObsoleteWorkersApi
+private var currentWorker: Worker? = null
 
 /**
  * Class representing a worker.
@@ -19,7 +24,7 @@ import kotlinx.cinterop.*
  * Worker's API resembles both executor and threads API:
  *
  * - It is a resource that has to be [closed][requestTermination].
- *     - Failure to terminatae **and** join the termination request leads to native memory leak.
+ *     - Failure to terminate **and** join the termination request leads to native memory leak.
  *     - It cannot be terminated externally while processing the work queue, leading to a crash.
  * - It can be [parked][park], but while parked, worker is allowed to process its own tasks' queue.
  *     - In order to unpark a worker, any task has to be submited to the worker.
@@ -28,9 +33,18 @@ import kotlinx.cinterop.*
  * - Attempts to invoke any method of worker being terminated lead to a runtime exception.
  *     - It includes such things as innocuous [Worker.current] from the **current** worker.
  */
-@Suppress("NON_PUBLIC_PRIMARY_CONSTRUCTOR_OF_INLINE_CLASS")
 @ObsoleteWorkersApi
-public value class Worker @PublishedApi internal constructor(public val id: Int) {
+public class Worker private constructor(errorReporting: Boolean, name: String?, spawnThread: Boolean) {
+
+    private val internal: COpaquePointer = createWorkerInternal(this, spawnThread)
+
+    // TODO cleaner
+
+    /**
+     * Name of the worker, as specified in [Worker.start] or "worker $id" by default,
+     */
+    public val name: String = name ?: "worker ${TODO("id")}"
+
     public companion object {
         /**
          * Start new scheduling primitive, such as thread, to accept new tasks via `execute` interface.
@@ -42,7 +56,7 @@ public value class Worker @PublishedApi internal constructor(public val id: Int)
          * @return worker object, usable across multiple concurrent contexts.
          */
         public fun start(errorReporting: Boolean = true, name: String? = null): Worker
-                = Worker(startInternal(errorReporting, createRetainedExternalRCRef(name)))
+                = Worker(errorReporting, name, true)
 
         /**
          * Return the current worker. Worker context is accessible to any valid Kotlin context,
@@ -50,7 +64,8 @@ public value class Worker @PublishedApi internal constructor(public val id: Int)
          * For other situations [processQueue] must be called explicitly to process request queue.
          * @return current worker object, usable across multiple concurrent contexts.
          */
-        public val current: Worker get() = Worker(currentInternal())
+        public val current: Worker
+            get() = currentWorker ?: Worker(true, null, false).also { it.attachToCurrentThread() }
 
         /**
          * Create worker object from a C pointer.
@@ -61,7 +76,7 @@ public value class Worker @PublishedApi internal constructor(public val id: Int)
          */
         @Deprecated("Use kotlinx.cinterop.StableRef instead", level = DeprecationLevel.WARNING)
         public fun fromCPointer(pointer: COpaquePointer?): Worker =
-                if (pointer != null) Worker(pointer.toLong().toInt()) else throw IllegalArgumentException()
+                if (pointer != null) derefStablePointer(pointer) as Worker else throw IllegalArgumentException()
 
         /**
          * Get a list of all unterminated workers.
@@ -71,7 +86,24 @@ public value class Worker @PublishedApi internal constructor(public val id: Int)
          */
         @ExperimentalStdlibApi
         public val activeWorkers: List<Worker>
-            get() = getActiveWorkersInternal().map { Worker(it) }
+            get() = TODO() // FIXME getActiveWorkersInternal().map {  }
+    }
+
+    private fun attachToCurrentThread() {
+        require(currentWorker == null) { "The thread must have no attached worker" }
+        currentWorker = this
+        attachToCurrentThread(this)
+    }
+
+    @Suppress("unused")
+    @ExportForCppRuntime("Kotlin_Worker_executeEventLoop")
+    internal fun executeEventLoop() {
+        attachToCurrentThread()
+
+        while (true) {
+            val terminate = processQueueElementBlocking(this)
+            if (terminate) break
+        }
     }
 
     /**
@@ -164,17 +196,6 @@ public value class Worker @PublishedApi internal constructor(public val id: Int)
     }
 
     /**
-     * Name of the worker, as specified in [Worker.start] or "worker $id" by default,
-     *
-     * @throws [IllegalStateException] if this request is executed on an invalid worker.
-     */
-    public val name: String
-        get() {
-            val customName = dereferenceExternalRCRef(getWorkerNameInternal(id)) as String?
-            return if (customName == null) "worker $id" else customName
-        }
-
-    /**
      * String representation of the worker.
      */
     override public fun toString(): String = "Worker $name"
@@ -190,7 +211,7 @@ public value class Worker @PublishedApi internal constructor(public val id: Int)
      * @return worker identifier as C pointer.
      */
     @Deprecated("Use kotlinx.cinterop.StableRef instead", level = DeprecationLevel.WARNING)
-    public fun asCPointer() : COpaquePointer? = id.toLong().toCPointer()
+    public fun asCPointer() : COpaquePointer? = createStablePointer(this)
 
     /**
      * Get platform thread id of the worker thread.

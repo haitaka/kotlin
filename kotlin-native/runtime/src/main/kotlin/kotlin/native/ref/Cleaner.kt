@@ -57,7 +57,7 @@ public sealed interface Cleaner
  * in this case, which can't be handled gracefully. The cleanup action
  * is not executed then, and cleaner and its argument might leak
  * (depending on the implementation).
- * The same problem occures when [cleanupAction] captures a value that refers (directly or indirectly) the cleaner:
+ * The same problem occurs when [cleanupAction] captures a value that refers (directly or indirectly) the cleaner:
  * ```
  * class LeakingResourceWrapper {
  *     private val cleaner = createCleaner(...) {
@@ -80,7 +80,7 @@ public sealed interface Cleaner
  * Cleaners cannot be used to perform actions during the program shutdown:
  * * cleaners that are referenced from globals will not be garbage collected at all,
  * * cleaners that become unreferenced just before exiting main() might not be garbage collected,
-     because the GC might not get a chance to run.
+ *   because the GC might not get a chance to run.
  *
  * @param resource an object for which to perform [cleanupAction]
  * @param cleanupAction a cleanup to perform on [resource]. Must not capture anything.

@@ -9,6 +9,7 @@ import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.identityHashCode
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CFunction
+import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlin.native.internal.*
 import kotlin.native.internal.ref.*
@@ -50,13 +51,17 @@ internal fun executeImpl(worker: Worker, mode: TransferMode, producer: () -> Any
     return Future<Any?>(executeInternal(worker.id, jobArgument, job))
 }
 
-@GCUnsafeCall("Kotlin_Worker_startInternal")
+@GCUnsafeCall("Kotlin_Worker_createWorkerInternal")
 @ObsoleteWorkersApi
-external internal fun startInternal(errorReporting: Boolean, name: ExternalRCRef): Int
+external internal fun createWorkerInternal(reportErrors: Boolean, spawnThread: Boolean): COpaquePointer
 
-@GCUnsafeCall("Kotlin_Worker_currentInternal")
+@GCUnsafeCall("Kotlin_Worker_attachToCurrentThreadInternal")
 @ObsoleteWorkersApi
-external internal fun currentInternal(): Int
+external internal fun attachToCurrentThreadInternal(worker: COpaquePointer)
+
+@GCUnsafeCall("Kotlin_Worker_processQueueElementBlocking")
+@ObsoleteWorkersApi
+external internal fun processQueueElementBlocking(worker: COpaquePointer): Boolean
 
 @GCUnsafeCall("Kotlin_Worker_requestTerminationWorkerInternal")
 @ObsoleteWorkersApi
@@ -153,4 +158,4 @@ external internal fun getPlatfromThreadIdInternal(id: Int): ULong
 
 @GCUnsafeCall("Kotlin_Worker_getActiveWorkersInternal")
 @ObsoleteWorkersApi
-external internal fun getActiveWorkersInternal(): IntArray
+external internal fun getActiveWorkersInternal(): NativePtrArray

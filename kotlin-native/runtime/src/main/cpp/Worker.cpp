@@ -47,6 +47,7 @@ RUNTIME_NORETURN void ThrowWrongWorkerOrAlreadyTerminated();
 RUNTIME_NORETURN void ThrowFutureInvalidState();
 mm::RawExternalRCRef* WorkerExecuteLaunchpad(ExecuteJob job, mm::RawExternalRCRef* jobArgument);
 void WorkerExecuteAfterLaunchpad(mm::RawExternalRCRef* job);
+void Kotlin_Worker_executeEventLoop(KRef worker);
 
 }  // extern "C"
 
@@ -120,13 +121,9 @@ typedef std::multiset<Job, JobCompare> DelayedJobSet;
 
 }  // namespace
 
-class Worker {
+class Worker : Pinned {
  public:
-  Worker(KInt id, WorkerExceptionHandling exceptionHandling, mm::OwningExternalRCRef name, WorkerKind kind)
-      : id_(id),
-        kind_(kind),
-        name_(std::move(name)),
-        exceptionHandling_(exceptionHandling) {
+  Worker(WorkerExceptionHandling exceptionHandling, WorkerKind kind) : kind_(kind), exceptionHandling_(exceptionHandling) {
     kotlin::ThreadStateGuard guard(ThreadState::kNative);
     pthread_mutex_init(&lock_, nullptr);
     pthread_cond_init(&cond_, nullptr);
@@ -151,11 +148,7 @@ class Worker {
 
   bool park(KLong timeoutMicroseconds, bool process);
 
-  KInt id() const { return id_; }
-
   WorkerExceptionHandling exceptionHandling() const { return exceptionHandling_; }
-
-  mm::RawExternalRCRef* name() const { return name_.get(); }
 
   WorkerKind kind() const { return kind_; }
 
@@ -163,29 +156,29 @@ class Worker {
 
   MemoryState* memoryState() { return memoryState_; }
 
+  bool isTerminated();
+
+  void attachToCurrentThread();
+
  private:
   void setThread(pthread_t thread) {
+      // TODO rewrite
     // For workers started using the Worker API, we set thread_ in startEventLoop when calling pthread_create.
     // But we also set thread_ in WorkerInit to handle the main thread and threads calling Kotlin from native code.
     // In this case, thread id will be set twice for workers started by the Worker API.
     // This assert takes this into account.
-    RuntimeAssert(thread_ == 0 || pthread_equal(thread_, thread),
-                  "Cannot overwrite thread id for worker with id=%d", id());
+    RuntimeAssert(thread_ == 0 || pthread_equal(thread_, thread), "Cannot overwrite thread id for worker %p", this);
     thread_ = thread;
   }
 
   void setMemoryState(MemoryState* state) {
-    RuntimeAssert(memoryState_ == nullptr, "MemoryState is already set for the worker with id=%d", id());
+    RuntimeAssert(memoryState_ == nullptr, "MemoryState is already set for the worker %p", this);
     memoryState_ = state;
   }
 
-  friend Worker* WorkerInit(MemoryState* memoryState);
-
-  KInt id_;
   WorkerKind kind_;
   std::deque<Job> queue_;
   DelayedJobSet delayed_;
-  mm::OwningExternalRCRef name_;
   // Lock and condition for waiting on the queue.
   pthread_mutex_t lock_;
   pthread_cond_t cond_;
@@ -198,8 +191,6 @@ class Worker {
 };
 
 namespace {
-
-THREAD_LOCAL_VARIABLE Worker* g_worker = nullptr;
 
 void waitInNativeState(pthread_cond_t* cond, pthread_mutex_t* mutex) {
     kotlin::compactObjectPoolInCurrentThread();
@@ -316,7 +307,6 @@ class State {
     pthread_mutex_init(&lock_, nullptr);
     pthread_cond_init(&cond_, nullptr);
 
-    currentWorkerId_ = 1;
     currentFutureId_ = 1;
     currentVersion_ = 0;
   }
@@ -328,53 +318,10 @@ class State {
     pthread_cond_destroy(&cond_);
   }
 
-  Worker* addWorkerUnlocked(WorkerExceptionHandling exceptionHandling, mm::OwningExternalRCRef name, WorkerKind kind) {
-    Worker* worker = nullptr;
-    {
-      Locker locker(&lock_);
-      worker = new Worker(nextWorkerId(), exceptionHandling, std::move(name), kind);
-      if (worker == nullptr) return nullptr;
-      workers_[worker->id()] = worker;
-    }
-    return worker;
-  }
-
-  void removeWorkerUnlocked(KInt id) {
-    Locker locker(&lock_);
-    auto it = workers_.find(id);
-    if (it == workers_.end()) return;
-    Worker* worker = it->second;
-    if (worker->kind() == WorkerKind::kNative) {
-      terminating_native_workers_[id] = worker->thread();
-    }
-    workers_.erase(it);
-  }
-
-  void destroyWorkerUnlocked(Worker* worker) {
-    {
-      // We call destroyWorkerUnlocked from runtimeDeinit when TLS may be already deallocated,
-      // so we have to use the pointer to MemoryState saved in the worker instance.
-      RuntimeAssert(pthread_equal(worker->thread(), pthread_self()),
-                    "Worker destruction must be executed by the worker thread.");
-      Locker locker(&lock_, worker->memoryState());
-      auto id = worker->id();
-      auto it = workers_.find(id);
-      if (it != workers_.end()) {
-        workers_.erase(it);
-      }
-    }
-    delete worker;
-  }
-
   Future* addJobToWorkerUnlocked(
-      KInt id, ExecuteJob jobFunction, mm::OwningExternalRCRef jobArgument, bool toFront) {
+      Worker* worker, ExecuteJob jobFunction, mm::OwningExternalRCRef jobArgument, bool toFront) {
     Future* future = nullptr;
-    Worker* worker = nullptr;
     Locker locker(&lock_);
-
-    auto it = workers_.find(id);
-    if (it == workers_.end()) return nullptr;
-    worker = it->second;
 
     future = new Future(nextFutureId());
     futures_[future->id()] = future;
@@ -396,17 +343,11 @@ class State {
     return future;
   }
 
-  bool executeJobAfterInWorkerUnlocked(KInt id, mm::OwningExternalRCRef operation, KLong afterMicroseconds) {
-    Worker* worker = nullptr;
-    Locker locker(&lock_);
+  bool executeJobAfterInWorkerUnlocked(Worker* worker, mm::OwningExternalRCRef operation, KLong afterMicroseconds) {
+    Locker locker(&lock_); // FIXME what's the point of lock now?
 
     RuntimeAssert(afterMicroseconds >= 0, "afterMicroseconds cannot be negative");
 
-    auto it = workers_.find(id);
-    if (it == workers_.end()) {
-      return false;
-    }
-    worker = it->second;
     Job job;
     job.kind = JOB_EXECUTE_AFTER;
     job.executeAfter.operation = operation.detach();
@@ -416,38 +357,29 @@ class State {
       job.executeAfter.whenExecute = konan::getTimeMicros() + afterMicroseconds;
       worker->putDelayedJob(job);
     }
-    return true;
+    return true; // FIXME always true?
   }
 
-  bool scheduleJobInWorkerUnlocked(KInt id, mm::OwningExternalRCRef operation) {
-      Worker* worker = nullptr;
-      Locker locker(&lock_);
-
-      auto it = workers_.find(id);
-      if (it == workers_.end()) {
-          return false;
-      }
-      worker = it->second;
-
+  bool scheduleJobInWorkerUnlocked(Worker* worker, mm::OwningExternalRCRef operation) {
+      Locker locker(&lock_); // FIXME what's the point of lock now?
       Job job;
       job.kind = JOB_EXECUTE_AFTER;
       job.executeAfter.operation = operation.detach();
       worker->putJob(job, false);
-      return true;
+      return true; // FIXME always true?
   }
 
   // Returns `true` if something was indeed processed.
-  bool processQueueUnlocked(KInt id) {
-    // Can only process queue of the current worker.
-    if (::g_worker == nullptr || id != ::g_worker->id()) ThrowWrongWorkerOrAlreadyTerminated();
-    JobKind kind = ::g_worker->processQueueElement(false);
+  bool processQueueUnlocked(Worker* worker) {
+      // TODO assert current thread
+    JobKind kind = worker->processQueueElement(false);
     return kind != JOB_NONE && kind != JOB_TERMINATE;
   }
 
-  bool parkUnlocked(KInt id, KLong timeoutMicroseconds, KBoolean process) {
+  bool parkUnlocked(Worker* worker, KLong timeoutMicroseconds, KBoolean process) {
       // Can only park current worker.
-      if (::g_worker == nullptr || id != ::g_worker->id()) ThrowWrongWorkerOrAlreadyTerminated();
-      return ::g_worker->park(timeoutMicroseconds, process);
+      // TODO assert current thread
+      return worker->park(timeoutMicroseconds, process);
   }
 
   KInt stateOfFutureUnlocked(KInt id) {
@@ -483,15 +415,6 @@ class State {
     }
 
     return result;
-  }
-
-  mm::RawExternalRCRef* getWorkerNameUnlocked(KInt id) {
-      Locker locker(&lock_);
-      auto it = workers_.find(id);
-      if (it == workers_.end()) {
-          ThrowWorkerAlreadyTerminated();
-      }
-      return it->second->name();
   }
 
   KBoolean waitForAnyFuture(KInt version, KInt millis) {
@@ -532,73 +455,36 @@ class State {
   }
 
   // All those called with lock taken.
-  KInt nextWorkerId() { return currentWorkerId_++; }
   KInt nextFutureId() { return currentFutureId_++; }
 
-  void destroyWorkerThreadDataUnlocked(KInt id) {
-    // We destroy worker data when its thread is already unresigtered from the memory subsystem,
-    // so there is no need to wrap the lock with a thread state switch.
-    Locker locker(&lock_, false);
-    auto it = terminating_native_workers_.find(id);
-    if (it == terminating_native_workers_.end()) return;
-    // If this worker was not joined, detach it to free resources.
-    pthread_detach(it->second);
-    terminating_native_workers_.erase(it);
-  }
-
-  template <typename F>
-  void waitNativeWorkersTerminationUnlocked(bool checkLeaks, F waitForWorker) {
-      std::vector<std::pair<KInt, pthread_t>> workersToWait;
-      {
-          Locker locker(&lock_);
-
-          if (checkLeaks) {
-              checkNativeWorkersLeakLocked();
-          }
-
-          for (auto& kvp : terminating_native_workers_) {
-              RuntimeAssert(!pthread_equal(kvp.second, pthread_self()), "Native worker is joining with itself");
-              if (waitForWorker(kvp.first)) {
-                  workersToWait.push_back(kvp);
-              }
-          }
-          for (auto worker : workersToWait) {
-              terminating_native_workers_.erase(worker.first);
-          }
-      }
-
-      ThreadStateGuard guard(ThreadState::kNative);
-      for (auto worker : workersToWait) {
-          pthread_join(worker.second, nullptr);
-      }
+  void destroyWorkerThreadDataUnlocked(Worker* worker) {
+      // TODO check if "native" i.e. spawned with thread worker
+    pthread_detach(worker->thread());
   }
 
   void checkNativeWorkersLeakLocked() {
-    size_t remainingNativeWorkers = 0;
-    for (const auto& kvp : workers_) {
-      Worker* worker = kvp.second;
-      if (worker->kind() == WorkerKind::kNative) {
-        ++remainingNativeWorkers;
-      }
-    }
-
-    if (remainingNativeWorkers != 0) {
-      konan::consoleErrorf(
-        "Unfinished workers detected, %zu workers leaked!\n"
-        "Use `Platform.isMemoryLeakCheckerActive = false` to avoid this check.\n",
-        remainingNativeWorkers);
-      konan::consoleFlush();
-      std::abort();
-    }
+      // FIXME???
+//    size_t remainingNativeWorkers = 0;
+//    for (const auto& kvp : workers_) {
+//      Worker* worker = kvp.second;
+//      if (worker->kind() == WorkerKind::kNative) {
+//        ++remainingNativeWorkers;
+//      }
+//    }
+//
+//    if (remainingNativeWorkers != 0) {
+//      konan::consoleErrorf(
+//        "Unfinished workers detected, %zu workers leaked!\n"
+//        "Use `Platform.isMemoryLeakCheckerActive = false` to avoid this check.\n",
+//        remainingNativeWorkers);
+//      konan::consoleFlush();
+//      std::abort();
+//    }
   }
 
-  KULong getWorkerPlatformThreadIdUnlocked(KInt id) {
+  KULong getWorkerPlatformThreadIdUnlocked(Worker* worker) {
       Locker locker(&lock_);
-      auto it = workers_.find(id);
-      if (it == workers_.end()) {
-          ThrowWorkerAlreadyTerminated();
-      }
-      return pthreadToNumber(it->second->thread());
+      return pthreadToNumber(worker->thread());
   }
 
   OBJ_GETTER0(getActiveWorkers) {
@@ -606,10 +492,11 @@ class State {
       {
           Locker locker(&lock_);
 
-          workers.reserve(workers_.size());
-          for (auto [id, worker] : workers_) {
-              workers.push_back(id);
-          }
+          // TODO
+//          workers.reserve(workers_.size());
+//          for (auto [id, worker] : workers_) {
+//              workers.push_back(id);
+//          }
       }
       ObjHolder arrayHolder;
       AllocArrayInstance(theIntArrayTypeInfo, workers.size(), arrayHolder.slot());
@@ -621,9 +508,8 @@ class State {
   pthread_mutex_t lock_;
   pthread_cond_t cond_;
   std::unordered_map<KInt, Future*> futures_;
-  std::unordered_map<KInt, Worker*> workers_;
-  std::unordered_map<KInt, pthread_t> terminating_native_workers_;
-  KInt currentWorkerId_;
+  //std::unordered_map<KInt, pthread_t> terminating_native_workers_;
+  //KInt currentWorkerId_;
   KInt currentFutureId_;
   KInt currentVersion_;
 };
@@ -674,35 +560,23 @@ void Future::cancelUnlocked(MemoryState* memoryState) {
 // Defined in RuntimeUtils.kt.
 extern "C" void ReportUnhandledException(KRef e);
 
-KInt startWorker(WorkerExceptionHandling exceptionHandling, mm::OwningExternalRCRef name) {
-  Worker* worker = theState()->addWorkerUnlocked(exceptionHandling, std::move(name), WorkerKind::kNative);
-  if (worker == nullptr) return -1;
-  worker->startEventLoop();
-  return worker->id();
-}
-
-KInt currentWorker() {
-  if (g_worker == nullptr) ThrowWorkerAlreadyTerminated();
-  return ::g_worker->id();
-}
-
-KInt execute(KInt id, mm::OwningExternalRCRef jobArgument, ExecuteJob jobFunction) {
-  Future* future = theState()->addJobToWorkerUnlocked(id, jobFunction, std::move(jobArgument), false);
+KInt execute(Worker* worker, mm::OwningExternalRCRef jobArgument, ExecuteJob jobFunction) {
+  Future* future = theState()->addJobToWorkerUnlocked(worker, jobFunction, std::move(jobArgument), false);
   if (future == nullptr) ThrowWorkerAlreadyTerminated();
   return future->id();
 }
 
-void executeAfter(KInt id, mm::OwningExternalRCRef job, KLong afterMicroseconds) {
-  if (!theState()->executeJobAfterInWorkerUnlocked(id, std::move(job), afterMicroseconds))
+void executeAfter(Worker* worker, mm::OwningExternalRCRef job, KLong afterMicroseconds) {
+  if (!theState()->executeJobAfterInWorkerUnlocked(worker, std::move(job), afterMicroseconds))
     ThrowWorkerAlreadyTerminated();
 }
 
-KBoolean processQueue(KInt id) {
-   return theState()->processQueueUnlocked(id);
+KBoolean processQueue(Worker* worker) {
+   return theState()->processQueueUnlocked(worker);
 }
 
-KBoolean park(KInt id, KLong timeoutMicroseconds, KBoolean process) {
-   return theState()->parkUnlocked(id, timeoutMicroseconds, process);
+KBoolean park(Worker* worker, KLong timeoutMicroseconds, KBoolean process) {
+   return theState()->parkUnlocked(worker, timeoutMicroseconds, process);
 }
 
 KInt stateOfFuture(KInt id) {
@@ -713,14 +587,10 @@ mm::OwningExternalRCRef consumeFuture(KInt id) {
   return theState()->consumeFutureUnlocked(id);
 }
 
-mm::RawExternalRCRef* getWorkerName(KInt id) {
-  return theState()->getWorkerNameUnlocked(id);
-}
-
-KInt requestTermination(KInt id, KBoolean processScheduledJobs) {
+KInt requestTermination(Worker* worker, KBoolean processScheduledJobs) {
   Future* future = theState()->addJobToWorkerUnlocked(
-      id, nullptr, nullptr, /* toFront = */ !processScheduledJobs);
-  if (future == nullptr) ThrowWorkerAlreadyTerminated();
+      worker, nullptr, nullptr, /* toFront = */ !processScheduledJobs);
+  if (future == nullptr) ThrowWorkerAlreadyTerminated(); // FIXME handle this case properly!!!
   return future->id();
 }
 
@@ -732,8 +602,8 @@ KInt versionToken() {
   return theState()->versionToken();
 }
 
-KULong platformThreadId(KInt id) {
-    return theState()->getWorkerPlatformThreadIdUnlocked(id);
+KULong platformThreadId(Worker* worker) {
+    return theState()->getWorkerPlatformThreadIdUnlocked(worker);
 }
 
 OBJ_GETTER0(activeWorkers) {
@@ -742,42 +612,22 @@ OBJ_GETTER0(activeWorkers) {
 
 }  // namespace
 
-KInt GetWorkerId(Worker* worker) {
-  return worker->id();
-}
-
-Worker* WorkerInit(MemoryState* memoryState) {
-  Worker* worker;
-  if (::g_worker != nullptr) {
-      worker = ::g_worker;
-  } else {
-      worker = theState()->addWorkerUnlocked(WorkerExceptionHandling::kDefault, nullptr, WorkerKind::kOther);
-      ::g_worker = worker;
-  }
-  worker->setThread(pthread_self());
-  worker->setMemoryState(memoryState);
-  return worker;
-}
-
-void WorkerDeinit(Worker* worker) {
-  ::g_worker = nullptr;
-  theState()->destroyWorkerUnlocked(worker);
-}
-
-void WorkerDestroyThreadDataIfNeeded(KInt id) {
-  theState()->destroyWorkerThreadDataUnlocked(id);
+void WorkerDestroyThreadDataIfNeeded(Worker* worker) {
+  theState()->destroyWorkerThreadDataUnlocked(worker);
 }
 
 void WaitNativeWorkersTermination() {
-  theState()->waitNativeWorkersTerminationUnlocked(true, [](KInt worker) { return true; });
+    TODO("REMOVE?");
+  //theState()->waitNativeWorkersTerminationUnlocked(true, [](KInt worker) { return true; });
 }
 
-void WaitNativeWorkerTermination(KInt id) {
-    theState()->waitNativeWorkersTerminationUnlocked(false, [id](KInt worker) { return worker == id; });
+void WaitNativeWorkerTermination(Worker* wantedWorker) {
+    // FIXME check if worker terminated?
+    pthread_join(wantedWorker->thread(), nullptr);
 }
 
-bool WorkerSchedule(KInt id, mm::OwningExternalRCRef job) {
-    return theState()->scheduleJobInWorkerUnlocked(id, std::move(job));
+bool WorkerSchedule(Worker* worker, mm::OwningExternalRCRef job) {
+    return theState()->scheduleJobInWorkerUnlocked(worker, std::move(job));
 }
 
 Worker::~Worker() {
@@ -815,40 +665,9 @@ Worker::~Worker() {
       mm::disposeExternalRCRef(job.executeAfter.operation);
   }
 
-  name_.reset();
-
   kotlin::AssertThreadState(memoryState_, ThreadState::kNative);
   pthread_mutex_destroy(&lock_);
   pthread_cond_destroy(&cond_);
-}
-
-namespace {
-
-void* workerRoutine(void* argument) {
-  Worker* worker = reinterpret_cast<Worker*>(argument);
-
-  // Kotlin_initRuntimeIfNeeded calls WorkerInit that needs
-  // to see there's already a worker created for this thread.
-  ::g_worker = worker;
-  Kotlin_initRuntimeIfNeeded();
-
-  // Only run this routine in the runnable state. The moment between this routine exiting and thread
-  // destructors running will be spent in the native state. `Kotlin_deinitRuntimeCallback` ensures
-  // that runtime deinitialization switches back to the runnable state.
-  kotlin::ThreadStateGuard guard(worker->memoryState(), ThreadState::kRunnable);
-
-  do {
-    if (worker->processQueueElement(true) == JOB_TERMINATE) break;
-  } while (true);
-
-  return nullptr;
-}
-
-}  // namespace
-
-void Worker::startEventLoop() {
-  kotlin::ThreadStateGuard guard(ThreadState::kNative);
-  pthread_create(&thread_, nullptr, workerRoutine, this);
 }
 
 void Worker::putJob(Job job, bool toFront) {
@@ -973,8 +792,6 @@ JobKind Worker::processQueueElement(bool blocking) {
         }
       }
       terminated_ = true;
-      // Termination request, remove the worker and notify the future.
-      theState()->removeWorkerUnlocked(id());
       job.terminationRequest.future->storeResultUnlocked(nullptr, true);
       break;
     }
@@ -1020,38 +837,84 @@ JobKind Worker::processQueueElement(bool blocking) {
   return job.kind;
 }
 
+namespace {
+
+void* workerRoutine(void* argument) {
+    Worker* worker = reinterpret_cast<Worker*>(argument);
+    // TODO revise
+    // Only run this routine in the runnable state. The moment between this routine exiting and thread
+    // destructors running will be spent in the native state. `Kotlin_deinitRuntimeCallback` ensures
+    // that runtime deinitialization switches back to the runnable state.
+    kotlin::ThreadStateGuard guard(worker->memoryState(), ThreadState::kRunnable);
+    Kotlin_Worker_executeEventLoop();
+    return nullptr;
+}
+
+} // namespace
+
+void Worker::startEventLoop() {
+    kotlin::ThreadStateGuard guard(ThreadState::kNative);
+    pthread_create(&thread_, nullptr, workerRoutine, this);
+}
+
+bool Worker::isTerminated() {
+    kotlin::ThreadStateGuard guard(ThreadState::kNative);
+    Locker locker(&lock_);
+    return terminated_;
+}
+
+void Worker::attachToCurrentThread() {
+    kotlin::ThreadStateGuard guard(ThreadState::kNative);
+    Locker locker(&lock_);
+    setThread(pthread_self());
+}
+
+
 extern "C" {
 
-KInt Kotlin_Worker_startInternal(KBoolean errorReporting, mm::RawExternalRCRef* name) {
-    return startWorker(errorReporting ? WorkerExceptionHandling::kDefault : WorkerExceptionHandling::kIgnore, mm::OwningExternalRCRef(name));
+Worker* Kotlin_Worker_createWorkerInternal(KBoolean reportErrors, KBoolean spawnThread) {
+    auto exceptionHandling = reportErrors ? WorkerExceptionHandling::kDefault : WorkerExceptionHandling::kIgnore;
+    WorkerKind kind = spawnThread ? WorkerKind::kNative : WorkerKind::kOther;
+
+    Worker* worker = new Worker(exceptionHandling, kind);
+    if (spawnThread) {
+        worker->startEventLoop();
+    }
+    return worker;
 }
 
-KInt Kotlin_Worker_currentInternal() {
-  return currentWorker();
+void Kotlin_Worker_destroyWorkerInternal(Worker* worker) {
+    // FIXME ensure something? Like terminated?
+    delete worker;
 }
 
-KInt Kotlin_Worker_requestTerminationWorkerInternal(KInt id, KBoolean processScheduledJobs) {
-  return requestTermination(id, processScheduledJobs);
+void Kotlin_Worker_attachToCurrentThreadInternal(Worker* worker) {
+    worker->attachToCurrentThread();
 }
 
-KInt Kotlin_Worker_executeInternal(KInt id, mm::RawExternalRCRef* jobArgument, ExecuteJob job) {
-  return execute(id, mm::OwningExternalRCRef(jobArgument), job);
+KBoolean Kotlin_Worker_processQueueElementBlocking(Worker* worker) {
+    JobKind result = worker->processQueueElement(true);
+    return result == JOB_TERMINATE;
 }
 
-void Kotlin_Worker_executeAfterInternal(KInt id, mm::RawExternalRCRef* job, KLong afterMicroseconds) {
-  executeAfter(id, mm::OwningExternalRCRef(job), afterMicroseconds);
+KInt Kotlin_Worker_requestTerminationWorkerInternal(Worker* worker, KBoolean processScheduledJobs) {
+  return requestTermination(worker, processScheduledJobs);
 }
 
-KBoolean Kotlin_Worker_processQueueInternal(KInt id) {
-  return processQueue(id);
+KInt Kotlin_Worker_executeInternal(Worker* worker, mm::RawExternalRCRef* jobArgument, ExecuteJob job) {
+  return execute(worker, mm::OwningExternalRCRef(jobArgument), job);
 }
 
-KBoolean Kotlin_Worker_parkInternal(KInt id, KLong timeoutMicroseconds, KBoolean process) {
-  return park(id, timeoutMicroseconds, process);
+void Kotlin_Worker_executeAfterInternal(Worker* worker, mm::RawExternalRCRef* job, KLong afterMicroseconds) {
+  executeAfter(worker, mm::OwningExternalRCRef(job), afterMicroseconds);
 }
 
-mm::RawExternalRCRef* Kotlin_Worker_getNameInternal(KInt id) {
-    return getWorkerName(id);
+KBoolean Kotlin_Worker_processQueueInternal(Worker* worker) {
+  return processQueue(worker);
+}
+
+KBoolean Kotlin_Worker_parkInternal(Worker* worker, KLong timeoutMicroseconds, KBoolean process) {
+  return park(worker, timeoutMicroseconds, process);
 }
 
 KInt Kotlin_Worker_stateOfFuture(KInt id) {
@@ -1070,12 +933,12 @@ KInt Kotlin_Worker_versionToken() {
   return versionToken();
 }
 
-void Kotlin_Worker_waitTermination(KInt id) {
-    WaitNativeWorkerTermination(id);
+void Kotlin_Worker_waitTermination(Worker* worker) {
+    WaitNativeWorkerTermination(worker);
 }
 
-KULong Kotlin_Worker_getPlatformThreadIdInternal(KInt id) {
-    return platformThreadId(id);
+KULong Kotlin_Worker_getPlatformThreadIdInternal(Worker* worker) {
+    return platformThreadId(worker);
 }
 
 OBJ_GETTER0(Kotlin_Worker_getActiveWorkersInternal) {

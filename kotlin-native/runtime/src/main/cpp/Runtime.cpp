@@ -41,7 +41,6 @@ enum class RuntimeStatus {
 
 struct RuntimeState {
     MemoryState* memoryState;
-    Worker* worker;
     RuntimeStatus status = RuntimeStatus::kUninitialized;
 };
 
@@ -102,7 +101,6 @@ NO_INLINE RuntimeState* initRuntime() {
   // Switch thread state because worker and globals inits require the runnable state.
   // This call may block if GC requested suspending threads.
   ThreadStateGuard stateGuard(result->memoryState, kotlin::ThreadState::kRunnable);
-  result->worker = WorkerInit(result->memoryState);
 
   InitOrDeinitGlobalVariables(ALLOC_THREAD_LOCAL_GLOBALS, result->memoryState);
   CommitTLSStorage(result->memoryState);
