@@ -37,6 +37,8 @@ interface Semilattice<T> {
     fun meet(x: T, y: T): T
 }
 
+fun <T> Semilattice<T>.leq(x: T, y: T): Boolean = meet(x, y) == x
+
 fun <T> Semilattice<T>.meetAll(values: List<T>): T = values.reduce { x, y -> meet(x, y) }
 
 private fun <K, T> MutableMap<K, T>.meetOrInsert(key: K, lattice: Semilattice<T>, value: T) {
