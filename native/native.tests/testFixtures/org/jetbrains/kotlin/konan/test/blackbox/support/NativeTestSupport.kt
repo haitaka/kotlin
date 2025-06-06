@@ -159,28 +159,28 @@ object NativeTestSupport {
 
         TestLogger.initialize() // Initialize special logging (directly to Gradle's console).
 
-        val gradleTaskName = EnvironmentVariable.GRADLE_TASK_NAME.readValue()
-        fun Long.toMBs() = (this / 1024 / 1024)
-
-        // Set up memory tracking and reporting:
-        MemoryTracker.startTracking(intervalMillis = 1000) { memoryMark ->
-            TestLogger.log(
-                buildString {
-                    append(memoryMark.timestamp).append(' ').append(gradleTaskName)
-                    append(" Memory usage (MB): ")
-                    append("used=").append(memoryMark.usedMemory.toMBs())
-                    append(", free=").append(memoryMark.freeMemory.toMBs())
-                    append(", total=").append(memoryMark.totalMemory.toMBs())
-                    append(", max=").append(memoryMark.maxMemory.toMBs())
-                }
-            )
-        }
-
-        // Stop tracking memory when all tests are finished:
-        root.getStore(NAMESPACE).put(
-            testClassKeyFor<MemoryTracker>(),
-            ExtensionContext.Store.CloseableResource { MemoryTracker.stopTracking() }
-        )
+//        val gradleTaskName = EnvironmentVariable.GRADLE_TASK_NAME.readValue()
+//        fun Long.toMBs() = (this / 1024 / 1024)
+//
+//        // Set up memory tracking and reporting:
+//        MemoryTracker.startTracking(intervalMillis = 1000) { memoryMark ->
+//            TestLogger.log(
+//                buildString {
+//                    append(memoryMark.timestamp).append(' ').append(gradleTaskName)
+//                    append(" Memory usage (MB): ")
+//                    append("used=").append(memoryMark.usedMemory.toMBs())
+//                    append(", free=").append(memoryMark.freeMemory.toMBs())
+//                    append(", total=").append(memoryMark.totalMemory.toMBs())
+//                    append(", max=").append(memoryMark.maxMemory.toMBs())
+//                }
+//            )
+//        }
+//
+//        // Stop tracking memory when all tests are finished:
+//        root.getStore(NAMESPACE).put(
+//            testClassKeyFor<MemoryTracker>(),
+//            ExtensionContext.Store.CloseableResource { MemoryTracker.stopTracking() }
+//        )
     }
 
     /*************** Test class settings (common part) ***************/

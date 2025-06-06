@@ -7,15 +7,20 @@ package org.jetbrains.kotlin.konan.test.gcfuzzing
 
 import org.jetbrains.kotlin.codegen.forTestCompile.ForTestCompileRuntime
 import org.jetbrains.kotlin.konan.test.blackbox.AbstractNativeSimpleTest
+import org.jetbrains.kotlin.konan.test.blackbox.buildDir
 import org.jetbrains.kotlin.konan.test.blackbox.support.ClassLevelProperty
 import org.jetbrains.kotlin.konan.test.blackbox.support.EnforcedProperty
+import org.jetbrains.kotlin.konan.test.blackbox.support.runner.RunResult
 import org.jetbrains.kotlin.konan.test.blackbox.support.settings.Timeouts
 import org.jetbrains.kotlin.konan.test.gcfuzzing.dsl.*
 import org.jetbrains.kotlin.konan.test.gcfuzzing.execution.*
 import org.jetbrains.kotlin.modules.TargetId
+import org.jetbrains.kotlin.konan.test.gcfuzzing.fuzzer.*
+import org.jetbrains.kotlin.native.executors.HostExecutor
 import org.jetbrains.kotlin.test.services.JUnit5Assertions
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.TestInfo
+import org.junit.jupiter.api.*
+import java.util.logging.Logger
+import kotlin.time.Duration.Companion.seconds
 
 private fun assertFilesEqual(expected: java.io.File, actual: java.io.File) {
     JUnit5Assertions.assertEqualsToFile(
@@ -42,6 +47,8 @@ class GCFuzzingDSLTest : AbstractNativeSimpleTest() {
         ForTestCompileRuntime.transformTestDataPath("native/native.tests/gc-fuzzing-tests/engine/testData/gcFuzzingDSLTest").absoluteFile
 
     private fun runTest(name: String, program: Program) {
+        val baseDir = buildDir.resolve(name)
+        val dslGeneratedDir = baseDir.resolve("generated")
         val output = program.translate()
         val dslGeneratedDir = resolveDslDir(name)
         output.save(dslGeneratedDir)
@@ -399,5 +406,77 @@ class GCFuzzingDSLTest : AbstractNativeSimpleTest() {
                 }
             )
         )
+    }
+}
+
+
+// TODO @TestMethodOrder(MethodOrder.M)
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class GCFuzzingTest : AbstractNativeSimpleTest() {
+//    private fun runTest(name: String, program: Program) {
+//        val output = program.translate()
+//        output.save(dslGeneratedDir)
+//        runDSL(name, output, testRunSettings.get<Timeouts>().executionTimeout)
+//    }
+//
+//    private inline fun runTest(testInfo: TestInfo, block: () -> Program) = runTest(testInfo.testMethod.get().name, block())
+
+    fun FuzzerSession.runProgram(progId: ProgramId): RunResult {
+        if (progId in score) {
+            // TODO logger
+            println("!!!!!!!! evaluation $progId again")
+        }
+        val name = progId.toString()
+        val baseDir = buildDir.resolve(name)
+        val dslGeneratedDir = baseDir.resolve("generated")
+        val output = getProgram(progId).translate(moduleName = "ktlib")
+        output.save(dslGeneratedDir)
+        return runDSL(
+            name,
+            output,
+            1.seconds,//testRunSettings.get<Timeouts>().executionTimeout
+        )
+    }
+
+    @Test
+    fun test0(testInfo: TestInfo) {
+        val baseName = testInfo.testMethod.get().name
+        val session = FuzzerSession()
+        session.runSelection(seed = 1000) { prog ->
+            val result = runProgram(prog)
+            if (result.exitCode != 0 && result.exitCode != null) return@runSelection -1
+            val stderr = result.processOutput.stdErr
+            val markTimes = stderr.lines().mapNotNull {
+                //Regex(".*Marked .* objects in (\\d+) microseconds.*").matchEntire(it)?.groupValues?.get(1)?.toInt()
+                //Regex(".* Mutators pause time #1: (\\d+) microseconds.*").matchEntire(it)?.groupValues?.get(1)?.toInt()
+                Regex(".*Time to pause .* (\\d+) microseconds.*").matchEntire(it)?.groupValues?.get(1)?.toInt()
+            }
+            val score = markTimes.sorted().getOrNull((markTimes.size * 0.9).toInt())
+            score ?: 0
+        }
+    }
+
+    var x = 0
+
+    @TestFactory
+    fun testFac(): Collection<DynamicTest> {
+        val fuzzer = SimpleFuzzer(0)
+        return List(10) {
+            DynamicTest.dynamicTest("t$it") {
+                fuzzer.runSingle { programId ->
+                    val name = programId.toString()
+
+                    val baseDir = buildDir.resolve(name)
+                    val dslGeneratedDir = baseDir.resolve("generated")
+                    val output = getProgram(programId).translate(moduleName = "ktlib")
+                    output.save(dslGeneratedDir)
+                    runDSL(
+                        name,
+                        output,
+                        1.seconds,//testRunSettings.get<Timeouts>().executionTimeout
+                    )
+                }
+            }
+        }
     }
 }

@@ -12,7 +12,7 @@ import org.jetbrains.kotlin.konan.test.blackbox.support.settings.testProcessExec
 import org.jetbrains.kotlin.native.executors.Executor
 
 object TestRunners {
-    fun createProperTestRunner(testRun: TestRun, settings: Settings): Runner<Unit> = with(settings) {
+    fun createProperTestRunner(testRun: TestRun, settings: Settings): Runner<*> = with(settings) {
         if (get<ForcedNoopTestRunner>().value) {
             NoopTestRunner
         } else {
@@ -20,7 +20,7 @@ object TestRunners {
         }
     }
 
-    private fun Executor.toRunner(settings: Settings, testRun: TestRun): AbstractRunner<Unit> =
+    private fun Executor.toRunner(settings: Settings, testRun: TestRun): AbstractRunner =
         if (settings.get<SharedExecutionTestRunner>().value) {
             SharedExecutionBuilder.buildRunner(settings, this, testRun)
         } else {

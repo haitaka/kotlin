@@ -31,9 +31,9 @@ class Config(
 ) {
     companion object {
         val DEFAULT = Config(
-            maximumStackDepth = 500,
+            maximumStackDepth = 100,
             mainLoopRepeatCount = 100000,
-            maxThreadCount = 100,
+            maxThreadCount = 20,
             memoryPressureHazardZoneBytes = 2.5.GiB..3.0.GiB,
             memoryPressureCheckInterval = 1.seconds,
         )
@@ -54,12 +54,12 @@ class Output(
     }
 }
 
-fun Program.translate(config: Config = Config.DEFAULT): Output {
+fun Program.translate(config: Config = Config.DEFAULT, moduleName: String = "ktlib"): Output {
     val cinteropConfig = CInteropConfig(moduleName = "cinterop")
     val kotlinConfig = KotlinConfig(
         cinteropModuleName = cinteropConfig.moduleName,
         maximumStackDepth = config.maximumStackDepth,
-        moduleName = "ktlib"
+        moduleName = moduleName
     )
     val kotlinModuleCapitalized = kotlinConfig.moduleName.replaceFirstChar { it.uppercase() }
     val objcConfig = ObjCConfig(

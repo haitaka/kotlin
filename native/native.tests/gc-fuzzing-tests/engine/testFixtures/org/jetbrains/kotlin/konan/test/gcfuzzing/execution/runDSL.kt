@@ -17,6 +17,7 @@ import org.jetbrains.kotlin.konan.test.blackbox.support.TestName
 import org.jetbrains.kotlin.konan.test.blackbox.support.compilation.TestCompilationFactory
 import org.jetbrains.kotlin.konan.test.blackbox.support.compilation.TestCompilationResult.Companion.assertSuccess
 import org.jetbrains.kotlin.konan.test.blackbox.support.compilation.codesign
+import org.jetbrains.kotlin.konan.test.blackbox.support.runner.RunResult
 import org.jetbrains.kotlin.konan.test.blackbox.support.runner.TestExecutable
 import org.jetbrains.kotlin.konan.test.blackbox.support.runner.TestRunCheck.ExecutionTimeout
 import org.jetbrains.kotlin.konan.test.blackbox.support.runner.TestRunCheck.ExitCode
@@ -27,6 +28,8 @@ import org.jetbrains.kotlin.konan.test.blackbox.support.util.TestOutputFilter
 import org.jetbrains.kotlin.konan.test.blackbox.support.util.compileWithClang
 import org.jetbrains.kotlin.konan.test.gcfuzzing.dsl.Output
 import org.junit.jupiter.api.Assumptions
+import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.DynamicTest.dynamicTest
 import java.io.File
 import kotlin.time.Duration
 
@@ -37,7 +40,7 @@ fun AbstractNativeSimpleTest.runDSL(
     testName: String,
     dslOutput: Output,
     executionTimeout: Duration
-) {
+): RunResult {
     val baseDir = resolveTestBuildDir(testName)
     val dslGeneratedDir = resolveDslDir(testName)
     Assumptions.assumeTrue(testRunSettings.get<KotlinNativeTargets>().hostTarget.family.isAppleFamily)
@@ -47,10 +50,11 @@ fun AbstractNativeSimpleTest.runDSL(
         baseDir,
         freeCompilerArgs = TestCompilerArgs(compilerArgs = emptyList(), cinteropArgs = dslOutput.cinterop.args),
     ).assertSuccess()
+    val moduleName = dslOutput.kotlin.frameworkName// + testName
     val objcFrameworkTestCase = generateObjCFrameworkTestCase(
         TestKind.STANDALONE_NO_TR,
         TestCase.NoTestRunnerExtras(),
-        dslOutput.kotlin.frameworkName,
+        moduleName,
         listOf(dslGeneratedDir.resolve(dslOutput.kotlin.filename)),
         TestCompilerArgs(dslOutput.kotlin.args),
         setOf(TestModule.Given(cinterop.resultingArtifact.klibFile)),
@@ -83,5 +87,5 @@ fun AbstractNativeSimpleTest.runDSL(
         finalExecutable.loggedData,
         listOf(TestName(testName))
     )
-    runExecutableAndVerify(objcFrameworkTestCase, testExecutable)
+    return runExecutableAndVerifyPreserveResult(objcFrameworkTestCase, testExecutable)
 }

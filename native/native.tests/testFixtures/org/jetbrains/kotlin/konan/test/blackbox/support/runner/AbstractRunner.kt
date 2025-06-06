@@ -9,17 +9,18 @@ import org.jetbrains.kotlin.konan.test.blackbox.support.LoggedData
 import org.jetbrains.kotlin.test.services.JUnit5Assertions.assertTrue
 import org.opentest4j.TestAbortedException
 
-internal abstract class AbstractRunner<R> : Runner<R> {
+internal abstract class AbstractRunner : Runner<RunResult> {
     protected abstract fun buildRun(): AbstractRun
-    protected abstract fun buildResultHandler(runResult: RunResult): AbstractResultHandler<R>
+    protected abstract fun buildResultHandler(runResult: RunResult): AbstractResultHandler<Unit>
     protected abstract fun getLoggedParameters(): LoggedData.TestRunParameters
     protected abstract fun handleUnexpectedFailure(t: Throwable): Nothing
 
-    final override fun run(): R = try {
+    final override fun run(): RunResult = try {
         val run = buildRun()
         val runResult = run.run()
         val resultHandler = buildResultHandler(runResult)
         resultHandler.handle()
+        runResult
     } catch (t: Throwable) {
         when (t) {
             is AssertionError, is TestAbortedException -> throw t

@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.konan.test.gcfuzzing
 import org.jetbrains.kotlin.konan.test.blackbox.AbstractNativeSimpleTest
 import org.jetbrains.kotlin.konan.test.gcfuzzing.fuzzer.*
 import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 import java.util.stream.Stream
 import kotlin.time.TimeSource
@@ -44,6 +45,29 @@ class GCFuzzingTest : AbstractNativeSimpleTest() {
                 execute(stepId)
             }
         }.asStream()
+    }
+
+    @Test
+    fun selection() {
+        val session = FuzzerSession()
+        with (session) {
+            runSelection(
+                seed = 0,
+                populationSize = 10,
+                numGenerations = 10,
+                select = { generation, size ->
+                    generation.sortedBy { score[it]!! }.takeLast(size)
+                },
+                evaluate = {
+                    val res = execute(it)
+                    val stdout = res.processOutput.stdOut.filteredOutput
+                    stdout.lines().mapNotNull {
+                        val regex = Regex("Coverage = (\\d+)")
+                        regex.matchEntire(it)?.groups[1]?.value?.toIntOrNull()
+                    }.sum()
+                }
+            )
+        }
     }
 
 }

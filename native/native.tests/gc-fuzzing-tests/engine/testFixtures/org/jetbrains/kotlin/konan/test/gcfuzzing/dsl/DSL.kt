@@ -5,65 +5,72 @@
 
 package org.jetbrains.kotlin.konan.test.gcfuzzing.dsl
 
-class Program(
+import java.io.File
+
+data class Program(
     val definitions: List<Definition>,
     val mainBody: Body,
 )
+
+fun Program.save(root: File) {
+    root.mkdirs()
+    root.resolve("dsl").writeText(this.toString())
+}
 
 typealias EntityId = Int
 
 sealed interface Definition {
     val targetLanguage: TargetLanguage
 
-    class Class(
+    data class Class(
         override val targetLanguage: TargetLanguage,
         val fields: List<Field>,
     ) : Definition
 
-    class Function(
+    data class Function(
         override val targetLanguage: TargetLanguage,
         val parameters: List<Parameter>,
         val body: BodyWithReturn,
     ) : Definition
 
-    class Global(
+    data class Global(
         override val targetLanguage: TargetLanguage,
         val field: Field,
     ) : Definition
 }
 
 sealed interface TargetLanguage {
-    object Kotlin : TargetLanguage
-    object ObjC : TargetLanguage
+    data object Kotlin : TargetLanguage
+    data object ObjC : TargetLanguage
 }
 
-object Field
+data object Field
 
-object Parameter
+data object Parameter
 
-class Body(
+data class Body(
     val statements: List<BodyStatement>,
 )
 
 sealed interface BodyStatement {
-    class Alloc(val classId: EntityId, val args: List<LoadExpression>) : BodyStatement
-    class Load(val from: LoadExpression) : BodyStatement
-    class Store(val to: StoreExpression, val from: LoadExpression) : BodyStatement
-    class Call(val functionId: EntityId, val args: List<LoadExpression>) : BodyStatement
-    class SpawnThread(val functionId: EntityId, val args: List<LoadExpression>) : BodyStatement
+    data class Alloc(val classId: EntityId, val args: List<LoadExpression>) : BodyStatement
+    data class Load(val from: LoadExpression) : BodyStatement
+    data class Store(val to: StoreExpression, val from: LoadExpression) : BodyStatement
+    data class Call(val functionId: EntityId, val args: List<LoadExpression>) : BodyStatement
+    data class SpawnThread(val functionId: EntityId, val args: List<LoadExpression>) : BodyStatement
 }
 
 sealed interface LoadExpression {
-    object Default : LoadExpression
-    class Local(val localId: EntityId, val path: Path) : LoadExpression
-    class Global(val globalId: EntityId, val path: Path) : LoadExpression
+    data object Default : LoadExpression
+    data class Local(val localId: EntityId, val path: Path) : LoadExpression
+    data class Global(val globalId: EntityId, val path: Path) : LoadExpression
 }
 
-class Path(val accessors: List<EntityId>)
+data class Path(val accessors: List<EntityId>)
 
 sealed interface StoreExpression {
-    class Local(val localId: EntityId, val path: Path) : StoreExpression
-    class Global(val globalId: EntityId, val path: Path) : StoreExpression
+    data class Local(val localId: EntityId, val path: Path) : StoreExpression
+    data class Global(val globalId: EntityId, val path: Path) : StoreExpression
 }
 
 class BodyWithReturn(

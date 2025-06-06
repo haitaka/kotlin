@@ -23,7 +23,7 @@ import kotlin.io.path.Path
 internal open class RunnerWithExecutor(
     private val executor: Executor,
     private val testRun: TestRun
-) : AbstractRunner<Unit>() {
+) : AbstractRunner() {
     private val executable get() = testRun.executable
 
     private val outputFilter: TestOutputFilter
