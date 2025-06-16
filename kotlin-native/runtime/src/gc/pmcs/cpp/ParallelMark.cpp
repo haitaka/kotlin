@@ -115,12 +115,17 @@ void gc::mark::ParallelMark::runMainInSTW() {
         GCLogDebug(gcHandle().getEpoch(), "Creating main (#0) mark worker");
 
         pacer_.begin(MarkPacer::Phase::kRootSet);
-        completeMutatorsRootSet(mainWorker);
+        gcEvent(GCState::kRS);
+        for (auto& thread: *lockedMutatorsList_) {
+            tryCollectRootSet(thread, mainWorker, false, false);
+        }
         spinWait([this] { return allMutators([](mm::ThreadData& mut) { return mut.gc().impl().markDispatcher_.published(); }); });
         // global root set must be collected after all the mutator's global data have been published
+        gcEvent(GCState::kRSGlobal);
         collectRootSetGlobals<MarkTraits>(gcHandle(), mainWorker);
 
         pacer_.begin(MarkPacer::Phase::kParallelMark);
+        gcEvent(GCState::kMarkParallel);
         parallelMark(mainWorker);
     }
 }
@@ -129,10 +134,11 @@ void gc::mark::ParallelMark::runOnMutator(mm::ThreadData& mutatorThread) {
     if (compiler::gcMarkSingleThreaded() || !mutatorsCooperate_) return;
 
     auto parallelWorker = createWorker();
+    mutatorEvent(MutatorEvent::kCreateWorker);
     if (parallelWorker) {
         GCLogDebug(gcHandle().getEpoch(), "Mutator thread cooperates in marking");
 
-        tryCollectRootSet(mutatorThread, *parallelWorker);
+        tryCollectRootSet(mutatorThread, *parallelWorker, true, false);
 
         completeRootSetAndMark(*parallelWorker);
     }
@@ -180,24 +186,34 @@ void gc::mark::ParallelMark::completeRootSetAndMark(ParallelProcessor::Worker& p
     pacer_.wait(MarkPacer::Phase::kRootSet);
     completeMutatorsRootSet(parallelWorker);
     pacer_.wait(MarkPacer::Phase::kParallelMark);
+    mutatorEvent(MutatorEvent::kMarkParallel); // FIXME aux thread?
     parallelMark(parallelWorker);
 }
 
 void gc::mark::ParallelMark::completeMutatorsRootSet(MarkTraits::MarkQueue& markQueue) {
     // workers compete for mutators to collect their root set
     for (auto& thread: *lockedMutatorsList_) {
-        tryCollectRootSet(thread, markQueue);
+        tryCollectRootSet(thread, markQueue, false, false);
     }
 }
 
-void gc::mark::ParallelMark::tryCollectRootSet(mm::ThreadData& thread, MarkTraits::MarkQueue& markQueue) {
+void gc::mark::ParallelMark::tryCollectRootSet(mm::ThreadData& thread, MarkTraits::MarkQueue& markQueue, bool own, bool gcThread) {
     auto& gcData = thread.gc().impl().markDispatcher_;
-    if (!gcData.tryLockRootSet()) return;
+    if (!gcData.tryLockRootSet()) {
+        if (!gcThread) mutatorEvent(MutatorEvent::kFailLockRS);
+        return;
+    }
+    if (!gcThread) mutatorEvent(own ? MutatorEvent::kRSLock : MutatorEvent::kRSForeignLock);
 
     GCLogDebug(gcHandle().getEpoch(), "Root set collection on thread %" PRIuPTR " for thread %" PRIuPTR,
                konan::currentThreadId(), thread.threadId());
     gcData.publish();
-    collectRootSetForThread<MarkTraits>(gcHandle(), markQueue, thread);
+    if (!gcThread) mutatorEvent(own ? MutatorEvent::kRSPublish : MutatorEvent::kRSForeignPublish);
+    if (gcThread) {
+        collectRootSetForThread<MarkTraits>(gcHandle(), markQueue, thread);
+    } else {
+        collectRootSetForThread<MarkTraits>(gcHandle(), markQueue, thread, own);
+    }
 }
 
 void gc::mark::ParallelMark::parallelMark(ParallelProcessor::Worker& worker) {

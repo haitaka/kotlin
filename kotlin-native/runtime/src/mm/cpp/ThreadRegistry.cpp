@@ -24,12 +24,14 @@ mm::ThreadRegistry::Node* mm::ThreadRegistry::RegisterCurrentThread() noexcept {
     Node*& currentDataNode = currentThreadDataNode_;
     RuntimeAssert(!IsCurrentThreadRegistered(), "This thread already had some data assigned to it.");
     currentDataNode = threadDataNode;
+    gc::mutatorEvent(gc::MutatorEvent::kAttach);
     threadDataNode->Get()->gc().onThreadRegistration();
     return threadDataNode;
 }
 
 void mm::ThreadRegistry::Unregister(Node* threadDataNode) noexcept {
     AssertThreadState(threadDataNode->Get(), ThreadState::kNative);
+    gc::mutatorEvent(gc::MutatorEvent::kDetach);
     list_.Erase(threadDataNode);
     // Do not touch `currentThreadData_` as TLS may already have been deallocated.
 }

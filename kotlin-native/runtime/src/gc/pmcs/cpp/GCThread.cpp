@@ -52,57 +52,70 @@ void gc::internal::MainGCThread::body() noexcept {
 }
 
 void gc::internal::MainGCThread::PerformFullGC(int64_t epoch) noexcept {
-    auto mainGCLock = mm::GlobalData::Instance().gc().gcLock();
+    {
+        auto mainGCLock = mm::GlobalData::Instance().gc().gcLock();
 
-    auto gcHandle = GCHandle::create(epoch);
+        gcEvent(GCState::kPreMark);
 
-    markDispatcher_.beginMarkingEpoch(gcHandle);
-    GCLogDebug(epoch, "Main GC requested marking in mutators");
+        auto gcHandle = GCHandle::create(epoch);
 
-    stopTheWorld(gcHandle, "GC stop the world #1: mark");
+        markDispatcher_.beginMarkingEpoch(gcHandle);
+        GCLogDebug(epoch, "Main GC requested marking in mutators");
 
-    auto& scheduler = gcScheduler_;
-    scheduler.onGCStart();
+        stopTheWorld(gcHandle, "GC stop the world #1: mark");
+        gcEvent(GCState::kMarkSTW);
 
-    state_.start(epoch);
+        auto &scheduler = gcScheduler_;
+        scheduler.onGCStart();
 
-    markDispatcher_.runMainInSTW();
+        state_.start(epoch);
 
-    markDispatcher_.endMarkingEpoch();
+        markDispatcher_.runMainInSTW();
 
-    if (compiler::concurrentWeakSweep()) {
-        // Expected to happen inside STW.
-        gc::EnableWeakRefBarriers(epoch);
+        markDispatcher_.endMarkingEpoch();
+
+        if (compiler::concurrentWeakSweep()) {
+            // Expected to happen inside STW.
+            gc::EnableWeakRefBarriers(epoch);
+            gcEvent(GCState::kWeakSweepBarriers);
+            resumeTheWorld(gcHandle);
+            gcEvent(GCState::kConcurrentWeakSweep);
+        }
+
+        gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle, mm::ExternalRCRefRegistry::instance());
+
+        if (compiler::concurrentWeakSweep()) {
+            stopTheWorld(gcHandle, "GC stop the world #2: prepare heap for sweep");
+            gcEvent(GCState::kSTW2);
+            gc::DisableWeakRefBarriers();
+        }
+
+        gcEvent(GCState::kPrepareAllocator);
+        // TODO outline as mark_.isolateMarkedHeapAndFinishMark()
+        // By this point all the alive heap must be marked.
+        // All the mutations (incl. allocations) after this method will be subject for the next GC.
+        // This should really be done by each individual thread while waiting
+        for (auto &thread: kotlin::mm::ThreadRegistry::Instance().LockForIter()) {
+            thread.allocator().prepareForGC();
+        }
+        allocator_.prepareForGC();
+
+        gcEvent(GCState::kResumeWorld);
         resumeTheWorld(gcHandle);
+
+        gcEvent(GCState::kSweep);
+        allocator_.sweep(gcHandle);
+        scheduler.onGCFinish(epoch, gcHandle.getKeptSizeBytes());
+        state_.finish(epoch);
+        gcHandle.finished();
+
+        // This may start a new thread. On some pthreads implementations, this may block waiting for concurrent thread
+        // destructors running. So, it must ensured that no locks are held by this point.
+        // TODO: Consider having an always on sleeping finalizer thread.
+        gcEvent(GCState::kScheduleFinalization);
+        allocator_.scheduleFinalization(gcHandle);
     }
-
-    gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle, mm::ExternalRCRefRegistry::instance());
-
-    if (compiler::concurrentWeakSweep()) {
-        stopTheWorld(gcHandle, "GC stop the world #2: prepare heap for sweep");
-        gc::DisableWeakRefBarriers();
-    }
-
-    // TODO outline as mark_.isolateMarkedHeapAndFinishMark()
-    // By this point all the alive heap must be marked.
-    // All the mutations (incl. allocations) after this method will be subject for the next GC.
-    // This should really be done by each individual thread while waiting
-    for (auto& thread : kotlin::mm::ThreadRegistry::Instance().LockForIter()) {
-        thread.allocator().prepareForGC();
-    }
-    allocator_.prepareForGC();
-
-    resumeTheWorld(gcHandle);
-
-    allocator_.sweep(gcHandle);
-    scheduler.onGCFinish(epoch, gcHandle.getKeptSizeBytes());
-    state_.finish(epoch);
-    gcHandle.finished();
-
-    // This may start a new thread. On some pthreads implementations, this may block waiting for concurrent thread
-    // destructors running. So, it must ensured that no locks are held by this point.
-    // TODO: Consider having an always on sleeping finalizer thread.
-    allocator_.scheduleFinalization(gcHandle);
+    gcEvent(GCState::kIdle);
 }
 
 gc::internal::AuxiliaryGCThreads::AuxiliaryGCThreads(mark::ParallelMark& markDispatcher, size_t count) noexcept :

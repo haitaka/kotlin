@@ -111,6 +111,26 @@ void Mark(GCHandle::GCMarkScope& markHandle, typename Traits::MarkQueue& markQue
 }
 
 template <typename Traits>
+void collectRootSetForThread(GCHandle gcHandle, typename Traits::MarkQueue& markQueue, mm::ThreadData& thread, bool own) {
+    auto handle = gcHandle.collectThreadRoots(thread);
+    // TODO: Remove useless mm::ThreadRootSet abstraction.
+    for (auto value : mm::ThreadRootSet(thread)) {
+        if (internal::collectRoot<Traits>(markQueue, value.object)) {
+            switch (value.source) {
+                case mm::ThreadRootSet::Source::kStack:
+                    mutatorEvent(own ? MutatorEvent::kRSAddStack : MutatorEvent::kRSForeignAddStack);
+                    handle.addStackRoot();
+                    break;
+                case mm::ThreadRootSet::Source::kTLS:
+                    mutatorEvent(own ? MutatorEvent::kRSAddTLS : MutatorEvent::kRSForeignAddTLS);
+                    handle.addThreadLocalRoot();
+                    break;
+            }
+        }
+    }
+}
+
+template <typename Traits>
 void collectRootSetForThread(GCHandle gcHandle, typename Traits::MarkQueue& markQueue, mm::ThreadData& thread) {
     auto handle = gcHandle.collectThreadRoots(thread);
     // TODO: Remove useless mm::ThreadRootSet abstraction.

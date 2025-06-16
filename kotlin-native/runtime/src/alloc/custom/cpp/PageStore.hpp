@@ -49,6 +49,7 @@ public:
             if ((page = unswept_.Pop())) {
                 // If there're unswept_ pages, the GC is in progress.
                 auto sweepHandle = SweepTraits::currentGCSweepScope(*handle);
+                gc::mutatorEvent(gc::MutatorEvent::kSweepPage);
                 if ((page = SweepSingle(sweepHandle, page, unswept_, used_, finalizerQueue))) {
                     return page;
                 }

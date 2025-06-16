@@ -132,6 +132,7 @@ const TypeInfo* mm::ExternalRCRefImpl::typeInfo() const noexcept {
 
 OBJ_GETTER0(mm::ExternalRCRefImpl::tryRef) noexcept {
     AssertThreadState(ThreadState::kRunnable);
+    gc::mutatorEvent(gc::MutatorEvent::kTryRef);
     RETURN_RESULT_OF(mm::weakRefReadBarrier, objAtomic());
 }
 

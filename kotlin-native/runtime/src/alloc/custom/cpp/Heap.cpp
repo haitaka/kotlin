@@ -51,9 +51,9 @@ FinalizerQueue Heap::Sweep(gc::GCHandle gcHandle) noexcept {
         singleExtraObjectPages_.Sweep(sweepHandle, finalizerQueue);
     }
     // wait for concurrent assistants to finish sweeping the last popped page
-    while (concurrentSweepersCount_.load(std::memory_order_acquire) > 0) {
-        std::this_thread::yield();
-    }
+//    while (concurrentSweepersCount_.load(std::memory_order_acquire) > 0) {
+//        std::this_thread::yield();
+//    }
     CustomAllocDebug("Heap::Sweep done");
     return finalizerQueue;
 }

@@ -162,7 +162,7 @@ private:
 
     void completeRootSetAndMark(ParallelProcessor::Worker& parallelWorker);
     void completeMutatorsRootSet(MarkTraits::MarkQueue& markQueue);
-    void tryCollectRootSet(mm::ThreadData& thread, ParallelProcessor::Worker& markQueue);
+    void tryCollectRootSet(mm::ThreadData& thread, ParallelProcessor::Worker& markQueue, bool own, bool gcThread);
     void parallelMark(ParallelProcessor::Worker& worker);
 
     std::optional<ParallelProcessor::Worker> createWorker();

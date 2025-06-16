@@ -7,6 +7,7 @@
 
 #include "Memory.h"
 #include "std_support/Atomic.hpp"
+#include "Events.hpp"
 
 #if __has_feature(thread_sanitizer)
 #include <sanitizer/tsan_interface.h>
@@ -49,6 +50,7 @@ public:
     PERFORMANCE_INLINE ObjHeader* operator=(ObjHeader* desired) noexcept { store(desired); return desired; }
 
     PERFORMANCE_INLINE ObjHeader* load() const noexcept {
+        gc::mutatorEvent(gc::MutatorEvent::kLoad);
 #if STRICT_ATOMICS_IN_HEAP
         // Consume stores in the object, that were released on the object's allocation
         // See `ObjectOps.cpp`
@@ -64,6 +66,7 @@ public:
     }
 
     PERFORMANCE_INLINE void store(ObjHeader* desired) noexcept {
+        gc::mutatorEvent(gc::MutatorEvent::kStore);
 #if STRICT_ATOMICS_IN_HEAP
         storeAtomic(desired, std::memory_order_relaxed);
 #else

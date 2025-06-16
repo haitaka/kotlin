@@ -16,6 +16,7 @@
 #include "RunLoopFinalizerProcessor.hpp"
 #include "TypeLayout.hpp"
 #include "Utils.hpp"
+#include "Events.hpp"
 
 namespace kotlin {
 

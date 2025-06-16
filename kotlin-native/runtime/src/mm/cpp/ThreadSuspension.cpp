@@ -49,6 +49,13 @@ PERFORMANCE_INLINE void mm::ThreadSuspensionData::MutatorPauseHandle::resume() n
 
 kotlin::ThreadState kotlin::mm::ThreadSuspensionData::setState(kotlin::ThreadState newState) noexcept {
     ThreadState oldState = state_.exchange(newState);
+    if (newState != oldState) {
+        if (newState == ThreadState::kNative) {
+            gc::mutatorEvent(gc::MutatorEvent::kNative);
+        } else {
+            gc::mutatorEvent(gc::MutatorEvent::kRunnable);
+        }
+    }
     if (oldState == ThreadState::kNative && newState == ThreadState::kRunnable) {
         // Must use already acquired `ThreadData` because TLS may be in invalid state e.g. during thread detach.
         // Also, this must load SP in sequentially consistent order, because GC
