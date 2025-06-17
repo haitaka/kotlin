@@ -11,6 +11,7 @@
 #include "std_support/Span.hpp"
 #include "Porting.h"
 #include "Logging.hpp"
+#include "client/mac/handler/minidump_generator.h"
 
 namespace {
     constexpr int kSignals[] = {
@@ -51,6 +52,10 @@ namespace {
         sigemptyset(&sigMask);
         sigaddset(&sigMask, signal);
         sigprocmask(SIG_UNBLOCK, &sigMask, nullptr);
+
+
+        google_breakpad::MinidumpGenerator minidump{};
+        minidump.Write("/tmp/minidump");
 
         RuntimeFail("Something went wrong: signal = %d", signal);
         int framesNumber = backtrace(stackTraceBuf.data(), 1024);

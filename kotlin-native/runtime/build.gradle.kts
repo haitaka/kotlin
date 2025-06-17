@@ -40,7 +40,7 @@ val targetList = enabledTargets(extensions.getByType<PlatformManager>())
 bitcode {
     allTargets {
         module("main") {
-            headersDirs.from("src/externalCallsChecker/common/cpp", "src/objcExport/cpp")
+            headersDirs.from("src/externalCallsChecker/common/cpp", "src/objcExport/cpp", "src/breakpad/cpp")
             sourceSets {
                 main {
                     // TODO: Split out out `base` module and merge it together with `main` into `runtime.bc`
@@ -242,6 +242,20 @@ bitcode {
                 testFixtures {}
                 test {}
             }
+        }
+
+        module("breakpad") {
+            //headersDirs.from(files("src/breakpad/cpp/third_party/mac_headers"))
+            sourceSets {
+                main {}
+                //testFixtures {}
+                //test {}
+            }
+            compilerArgs.set(listOf(
+                    "-std=c++17",
+                    "-DHAVE_MACH_O_NLIST_H",
+                    "-DHAVE_CONFIG_H",
+            ))
         }
 
         testsGroup("mm_test") {

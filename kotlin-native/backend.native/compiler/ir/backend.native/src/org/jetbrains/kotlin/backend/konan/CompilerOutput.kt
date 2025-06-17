@@ -124,6 +124,7 @@ private fun collectLlvmModules(generationState: NativeGenerationState, generated
         add(RuntimeModule.ALLOC_COMMON)
         add(RuntimeModule.GC_COMMON)
         add(RuntimeModule.GC_SCHEDULER_COMMON)
+        add(RuntimeModule.BREAKPAD)
         when (config.gcSchedulerType) {
             GCSchedulerType.MANUAL -> {
                 add(RuntimeModule.GC_SCHEDULER_MANUAL)
