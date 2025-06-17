@@ -44,7 +44,7 @@ namespace {
     }
 
     void CrashRecoverySignalHandler(int signal) {
-        RuntimeLogInfo({kotlin::logging::Tag::kLogging}, "Handling %ud", signal);
+        RuntimeLogInfo({kotlin::logging::Tag::kLogging}, "Handling %u", signal);
         // TODO llvm checks for context here
 
         // unblock the signal handling
@@ -54,8 +54,22 @@ namespace {
         sigprocmask(SIG_UNBLOCK, &sigMask, nullptr);
 
 
-        google_breakpad::MinidumpGenerator minidump{};
-        minidump.Write("/tmp/minidump");
+        {
+            bool report_current_thread = true;
+            google_breakpad::MinidumpGenerator md(mach_task_self(),
+                                                  report_current_thread ? MACH_PORT_NULL : mach_thread_self());
+            //md.SetTaskContext(task_context);
+//            if (exception_type && exception_code) {
+//                // If this is a real exception, give the filter (if any) a chance to
+//                // decide if this should be sent.
+//                if (filter_ && !filter_(callback_context_))
+//                    return false;
+//
+//                md.SetExceptionInformation(exception_type, exception_code,
+//                                           exception_subcode, thread_name);
+//            }
+            md.Write("/tmp/minidump");
+        }
 
         RuntimeFail("Something went wrong: signal = %d", signal);
         int framesNumber = backtrace(stackTraceBuf.data(), 1024);
@@ -73,7 +87,7 @@ namespace {
         sigemptyset(&handler.sa_mask); // TODO ???
 
         for (unsigned i = 0; i != kNumSignals; ++i) {
-            RuntimeLogInfo({kotlin::logging::Tag::kLogging}, "Installing handler for %ud", i);
+            RuntimeLogInfo({kotlin::logging::Tag::kLogging}, "Installing handler for %u", i);
             sigaction(kSignals[i], &handler, &prevActions[i]);
         }
     }
@@ -81,7 +95,7 @@ namespace {
     // Restore the previous signal handlers.
     [[maybe_unused]] void uninstallExceptionOrSignalHandlers() {
         for (unsigned i = 0; i != kNumSignals; ++i) {
-            RuntimeLogInfo({ kotlin::logging::Tag::kLogging }, "Uninstalling handler for %ud", i);
+            RuntimeLogInfo({ kotlin::logging::Tag::kLogging }, "Uninstalling handler for %u", i);
             sigaction(kSignals[i], &prevActions[i], nullptr);
         }
     }
