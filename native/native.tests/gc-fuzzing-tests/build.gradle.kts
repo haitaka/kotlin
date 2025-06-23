@@ -9,6 +9,7 @@ dependencies {
     testRuntimeOnly(libs.junit.jupiter.engine)
 
     testImplementation(testFixtures(project(":native:native.tests")))
+    testImplementation(testFixtures(project(":native:native.tests:gc-fuzzing-tests:engine")))
 }
 
 sourceSets {
@@ -30,4 +31,9 @@ nativeTest(
 ) {
     // nativeTest sets workingDir to rootDir so here we need to override it
     workingDir = projectDir
+
+    project.findProperty("gcfuzzing.binary")?.let {
+        systemProperty("gcfuzzing.id", it)
+    }
+    systemProperty("gcfuzzing.timelimit", project.findProperty("gcfuzzing.timelimit") ?: "1h")
 }
