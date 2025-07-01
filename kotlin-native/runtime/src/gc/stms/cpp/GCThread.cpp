@@ -7,22 +7,18 @@
 
 #include "Allocator.hpp"
 #include "GCScheduler.hpp"
-#include "GCStatistics.hpp"
+#include "GCTraits.hpp"
 #include "Logging.hpp"
-#include "MarkAndSweepUtils.hpp"
-#include "RootSet.hpp"
-#include "ThreadData.hpp"
-#include "ThreadRegistry.hpp"
 #include "ThreadSuspension.hpp"
 
 using namespace kotlin;
 
 gc::internal::GCThread::GCThread(GCStateHolder& state, alloc::Allocator& allocator, gcScheduler::GCScheduler& gcScheduler) noexcept :
-    state_(state), allocator_(allocator), gcScheduler_(gcScheduler), thread_(std::string_view("GC thread"), [this] { body(); }) {}
+    gcData_(state, allocator, gcScheduler, markQueue_), thread_(std::string_view("GC thread"), [this] { body(); }) {}
 
 void gc::internal::GCThread::body() noexcept {
     while (true) {
-        if (auto epoch = state_.waitScheduled()) {
+        if (auto epoch = gcData_.state_.waitScheduled()) {
             PerformFullGC(*epoch);
         } else {
             break;
@@ -31,35 +27,6 @@ void gc::internal::GCThread::body() noexcept {
 }
 
 void gc::internal::GCThread::PerformFullGC(int64_t epoch) noexcept {
-    auto mainGCLock = mm::GlobalData::Instance().gc().gcLock();
+    kotlin::gc::internal::PerformFullGC<GCTraits>(gcData_, epoch);
 
-    auto gcHandle = GCHandle::create(epoch);
-
-    stopTheWorld(gcHandle, "GC stop the world");
-
-    gcScheduler_.onGCStart();
-
-    state_.start(epoch);
-
-    gc::collectRootSet<internal::MarkTraits>(gcHandle, markQueue_, [](mm::ThreadData&) { return true; });
-
-    gc::Mark<internal::MarkTraits>(gcHandle, markQueue_);
-
-    gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle, mm::ExternalRCRefRegistry::instance());
-
-    // This should really be done by each individual thread while waiting
-    for (auto& thread : kotlin::mm::ThreadRegistry::Instance().LockForIter()) {
-        thread.allocator().prepareForGC();
-    }
-    allocator_.prepareForGC();
-
-    allocator_.sweep(gcHandle);
-
-    gcScheduler_.onGCFinish(epoch, gcHandle.getKeptSizeBytes());
-
-    resumeTheWorld(gcHandle);
-
-    state_.finish(epoch);
-    gcHandle.finished();
-    allocator_.scheduleFinalization(gcHandle);
 }

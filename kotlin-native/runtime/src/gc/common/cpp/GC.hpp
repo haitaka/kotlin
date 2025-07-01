@@ -17,6 +17,9 @@
 #include "TypeLayout.hpp"
 #include "Utils.hpp"
 
+// TODO
+#include "GCImpl.hpp"
+
 namespace kotlin {
 
 namespace alloc {
@@ -83,19 +86,20 @@ public:
 
     void onEpochFinalized(int64_t epoch) noexcept;
 
+    static void beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept;
+    static OBJ_GETTER(weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
+
+    static bool isMarked(ObjHeader* object) noexcept;
+
+    // This will drop the mark bit if it was set and return `true`.
+    // If the mark bit was unset, this will return `false`.
+    static bool tryResetMark(GC::ObjectData& objectData) noexcept;
+
 private:
     std::unique_ptr<Impl> impl_;
     ThreadStateAware<std::mutex> gcLock_{};
 };
 
-void beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept;
-OBJ_GETTER(weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
-
-bool isMarked(ObjHeader* object) noexcept;
-
-// This will drop the mark bit if it was set and return `true`.
-// If the mark bit was unset, this will return `false`.
-bool tryResetMark(GC::ObjectData& objectData) noexcept;
 
 namespace barriers {
 

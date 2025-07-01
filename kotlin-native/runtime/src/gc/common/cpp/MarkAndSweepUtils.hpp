@@ -182,7 +182,7 @@ void processWeaks(GCHandle gcHandle, mm::ExternalRCRefRegistry& registry) noexce
 }
 
 struct DefaultProcessWeaksTraits {
-    static bool IsMarked(ObjHeader* obj) noexcept { return gc::isMarked(obj); }
+    static bool IsMarked(ObjHeader* obj) noexcept { return gc::GC::isMarked(obj); }
 };
 
 void stopTheWorld(GCHandle gcHandle, const char* reason) noexcept;

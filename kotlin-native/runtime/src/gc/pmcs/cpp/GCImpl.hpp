@@ -18,7 +18,7 @@ namespace kotlin {
 namespace gc {
 
 // Stop-the-world parallel mark + concurrent sweep. The GC runs in a separate thread, finalizers run in another thread of their own.
-class GC::Impl : private Pinned {
+class GC::Impl : public GCImpl<internal::GCTraits> {
 public:
     Impl(alloc::Allocator& allocator, gcScheduler::GCScheduler& gcScheduler, bool mutatorsCooperate, size_t auxGCThreads) noexcept :
         markDispatcher_(mutatorsCooperate),
@@ -31,11 +31,11 @@ public:
     internal::AuxiliaryGCThreads auxThreads_;
 };
 
-class GC::ThreadData::Impl : private Pinned {
+class GC::ThreadData::Impl : public GCImpl<internal::GCTraits>::ThreadData {
 public:
-    Impl(GC::Impl& gc, mm::ThreadData& threadData) noexcept : markDispatcher_(gc.markDispatcher_, threadData) {}
+    Impl(GC::Impl& gc, mm::ThreadData& threadData) noexcept : GCImpl<internal::GCTraits>::ThreadData(gc, threadData), markDispatcher_(gc.markDispatcher_, threadData) {}
 
-    BarriersThreadData barriers_;
+    internal::GCTraits::Barriers::ThreadData barriers_{};
     mark::ParallelMarkThreadData markDispatcher_;
 };
 

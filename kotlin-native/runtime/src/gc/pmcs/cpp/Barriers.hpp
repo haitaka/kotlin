@@ -14,24 +14,27 @@
 
 namespace kotlin::gc {
 
-class BarriersThreadData : private Pinned {
+class Barriers {
 public:
-    void onThreadRegistration() noexcept;
-    void onSafePoint() noexcept;
-    
-    void startMarkingNewObjects(GCHandle gcHandle) noexcept;
-    void stopMarkingNewObjects() noexcept;
-    bool shouldMarkNewObjects() const noexcept;
+    class ThreadData : private Pinned {
+    public:
+        void onThreadRegistration() noexcept;
+        void onSafePoint() noexcept;
 
-    void onAllocation(ObjHeader* allocated);
-private:
-    std::optional<GCHandle::GCMarkScope> markHandle_{};
+        void startMarkingNewObjects(GCHandle gcHandle) noexcept;
+        void stopMarkingNewObjects() noexcept;
+        bool shouldMarkNewObjects() const noexcept;
+
+        void onAllocation(ObjHeader* allocated);
+    private:
+        std::optional<GCHandle::GCMarkScope> markHandle_{};
+    };
+
+    // Must be called during STW.
+    static void EnableWeakRefBarriers(int64_t epoch) noexcept;
+    static void DisableWeakRefBarriers() noexcept;
+
+    static OBJ_GETTER(WeakRefRead, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
 };
-
-// Must be called during STW.
-void EnableWeakRefBarriers(int64_t epoch) noexcept;
-void DisableWeakRefBarriers() noexcept;
-
-OBJ_GETTER(WeakRefRead, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept;
 
 } // namespace kotlin::gc

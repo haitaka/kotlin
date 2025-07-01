@@ -11,6 +11,7 @@
 #include "MarkTraits.hpp"
 #include "Utils.hpp"
 #include "concurrent/UtilityThread.hpp"
+#include "GCTraits.hpp"
 
 namespace kotlin::gc::internal {
 
@@ -22,10 +23,8 @@ private:
     void body() noexcept;
     void PerformFullGC(int64_t epoch) noexcept;
 
-    GCStateHolder& state_;
-    alloc::Allocator& allocator_;
-    gcScheduler::GCScheduler& gcScheduler_;
     MarkQueue markQueue_;
+    GCData<GCTraits> gcData_;
     UtilityThread thread_;
 };
 

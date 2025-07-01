@@ -87,10 +87,10 @@ struct DefaultSweepTraits {
     static bool IsMarkedByExtraObject(mm::ExtraObjectData& object) noexcept {
         auto* baseObject = object.GetBaseObject();
         if (!baseObject->heap()) return true;
-        return gc::isMarked(baseObject);
+        return gc::GC::isMarked(baseObject);
     }
 
-    static bool TryResetMark(typename ObjectFactory::NodeRef node) noexcept { return gc::tryResetMark(node.ObjectData()); }
+    static bool TryResetMark(typename ObjectFactory::NodeRef node) noexcept { return gc::GC::tryResetMark(node.ObjectData()); }
 };
 
 }

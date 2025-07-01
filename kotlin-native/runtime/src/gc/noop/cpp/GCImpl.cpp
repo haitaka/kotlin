@@ -49,18 +49,18 @@ void gc::GC::WaitFinished(int64_t epoch) noexcept {}
 
 void gc::GC::WaitFinalizers(int64_t epoch) noexcept {}
 
-ALWAYS_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {}
+ALWAYS_INLINE void gc::GC::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {}
 
-ALWAYS_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
+ALWAYS_INLINE OBJ_GETTER(gc::GC::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
     RETURN_OBJ(weakReferee.load(std::memory_order_relaxed));
 }
 
-bool gc::isMarked(ObjHeader* object) noexcept {
+bool gc::GC::isMarked(ObjHeader* object) noexcept {
     RuntimeAssert(false, "Should not reach here");
     return true;
 }
 
-ALWAYS_INLINE bool gc::tryResetMark(GC::ObjectData& objectData) noexcept {
+ALWAYS_INLINE bool gc::GC::tryResetMark(GC::ObjectData& objectData) noexcept {
     RuntimeAssert(false, "Should not reach here");
     return true;
 }

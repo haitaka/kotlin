@@ -20,10 +20,10 @@ namespace {
     if (compiler::runtimeAssertsMode() == compiler::RuntimeAssertsMode::kIgnore) return;
     for (auto objRef : heap) {
         auto obj = objRef.GetObjHeader();
-        if (gc::isMarked(obj)) {
+        if (gc::GC::isMarked(obj)) {
             traverseReferredObjects(obj, [obj](ObjHeader* field) {
                 if (field->heap()) {
-                    RuntimeAssert(gc::isMarked(field), "Field %p of an alive obj %p must be alive", field, obj);
+                    RuntimeAssert(gc::GC::isMarked(field), "Field %p of an alive obj %p must be alive", field, obj);
                 }
             });
         }

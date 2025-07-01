@@ -193,7 +193,7 @@ NO_INLINE void weakRefReadInMarkSlowPath(ObjHeader* weakReferee) noexcept {
 /** After the mark closure is built, but weak refs are not yet nulled out, every weak read should check if the weak referent is marked. */
 NO_INLINE ObjHeader* weakRefReadInWeakSweepSlowPath(ObjHeader* weakReferee) noexcept {
     assertPhase(BarriersPhase::kWeakProcessing);
-    if (!gc::isMarked(weakReferee)) {
+    if (!gc::GC::isMarked(weakReferee)) {
         return nullptr;
     }
     return weakReferee;

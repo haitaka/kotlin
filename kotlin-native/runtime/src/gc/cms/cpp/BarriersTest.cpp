@@ -73,8 +73,8 @@ TEST_F(BarriersTest, Deletion) {
 
         ObjHeader* ref = prevObj.header();
 
-        EXPECT_THAT(gc::isMarked(prevObj.header()), false);
-        EXPECT_THAT(gc::isMarked(newObj.header()), false);
+        EXPECT_THAT(gc::GC::isMarked(prevObj.header()), false);
+        EXPECT_THAT(gc::GC::isMarked(newObj.header()), false);
 
         {
             ThreadStateGuard guard(ThreadState::kNative); // pretend to be the GC thread
@@ -83,8 +83,8 @@ TEST_F(BarriersTest, Deletion) {
 
         UpdateHeapRef(&ref, newObj.header());
 
-        EXPECT_THAT(gc::isMarked(prevObj.header()), true);
-        EXPECT_THAT(gc::isMarked(newObj.header()), false);
+        EXPECT_THAT(gc::GC::isMarked(prevObj.header()), true);
+        EXPECT_THAT(gc::GC::isMarked(newObj.header()), false);
 
         {
             ThreadStateGuard guard(ThreadState::kNative); // pretend to be the GC thread
@@ -100,7 +100,7 @@ TEST_F(BarriersTest, AllocationDuringMarkBarreirs) {
     RunInNewThread([this](mm::ThreadData& threadData) {
         auto queueScope = withMutatorQueue(threadData);
         auto& obj = AllocateObject(threadData);
-        EXPECT_THAT(gc::isMarked(obj.header()), true);
+        EXPECT_THAT(gc::GC::isMarked(obj.header()), true);
     });
 
     gc::barriers::switchToWeakProcessingBarriers();
@@ -118,7 +118,7 @@ TEST_F(BarriersTest, ConcurrentDeletion) {
         threadData.allocator().prepareForGC();
     });
 
-    EXPECT_THAT(gc::isMarked(ref), false);
+    EXPECT_THAT(gc::GC::isMarked(ref), false);
 
     std::atomic<bool> canStart = false;
     std::atomic<std::size_t> finished = 0;
@@ -156,5 +156,5 @@ TEST_F(BarriersTest, ConcurrentDeletion) {
     gc::barriers::switchToWeakProcessingBarriers();
     gc::barriers::disableBarriers();
 
-    EXPECT_THAT(gc::isMarked(ref), true);
+    EXPECT_THAT(gc::GC::isMarked(ref), true);
 }

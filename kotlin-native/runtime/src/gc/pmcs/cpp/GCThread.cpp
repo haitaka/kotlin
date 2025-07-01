@@ -13,6 +13,7 @@
 #include "GCState.hpp"
 #include "MarkAndSweepUtils.hpp"
 #include "ParallelMark.hpp"
+#include "GCTraits.hpp"
 
 using namespace kotlin;
 
@@ -34,75 +35,22 @@ gc::internal::MainGCThread::MainGCThread(
         mark::ParallelMark& markDispatcher,
         alloc::Allocator& allocator,
         gcScheduler::GCScheduler& gcScheduler) noexcept :
-    state_(state),
-    markDispatcher_(markDispatcher),
-    allocator_(allocator),
-    gcScheduler_(gcScheduler),
+    gcData_(state, allocator, gcScheduler, markDispatcher),
     thread_(createGCThread("Main GC Thread", [this] { body(); })) {}
 
 void gc::internal::MainGCThread::body() noexcept {
     while (true) {
-        if (auto epoch = state_.waitScheduled()) {
+        if (auto epoch = gcData_.state_.waitScheduled()) {
             PerformFullGC(*epoch);
         } else {
             break;
         }
     }
-    markDispatcher_.requestShutdown();
+    gcData_.mark_.requestShutdown();
 }
 
 void gc::internal::MainGCThread::PerformFullGC(int64_t epoch) noexcept {
-    auto mainGCLock = mm::GlobalData::Instance().gc().gcLock();
-
-    auto gcHandle = GCHandle::create(epoch);
-
-    markDispatcher_.beginMarkingEpoch(gcHandle);
-    GCLogDebug(epoch, "Main GC requested marking in mutators");
-
-    stopTheWorld(gcHandle, "GC stop the world #1: mark");
-
-    auto& scheduler = gcScheduler_;
-    scheduler.onGCStart();
-
-    state_.start(epoch);
-
-    markDispatcher_.runMainInSTW();
-
-    markDispatcher_.endMarkingEpoch();
-
-    if (compiler::concurrentWeakSweep()) {
-        // Expected to happen inside STW.
-        gc::EnableWeakRefBarriers(epoch);
-        resumeTheWorld(gcHandle);
-    }
-
-    gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle, mm::ExternalRCRefRegistry::instance());
-
-    if (compiler::concurrentWeakSweep()) {
-        stopTheWorld(gcHandle, "GC stop the world #2: prepare heap for sweep");
-        gc::DisableWeakRefBarriers();
-    }
-
-    // TODO outline as mark_.isolateMarkedHeapAndFinishMark()
-    // By this point all the alive heap must be marked.
-    // All the mutations (incl. allocations) after this method will be subject for the next GC.
-    // This should really be done by each individual thread while waiting
-    for (auto& thread : kotlin::mm::ThreadRegistry::Instance().LockForIter()) {
-        thread.allocator().prepareForGC();
-    }
-    allocator_.prepareForGC();
-
-    resumeTheWorld(gcHandle);
-
-    allocator_.sweep(gcHandle);
-    scheduler.onGCFinish(epoch, gcHandle.getKeptSizeBytes());
-    state_.finish(epoch);
-    gcHandle.finished();
-
-    // This may start a new thread. On some pthreads implementations, this may block waiting for concurrent thread
-    // destructors running. So, it must ensured that no locks are held by this point.
-    // TODO: Consider having an always on sleeping finalizer thread.
-    allocator_.scheduleFinalization(gcHandle);
+    kotlin::gc::internal::PerformFullGC<GCTraits>(gcData_, epoch);
 }
 
 gc::internal::AuxiliaryGCThreads::AuxiliaryGCThreads(mark::ParallelMark& markDispatcher, size_t count) noexcept :

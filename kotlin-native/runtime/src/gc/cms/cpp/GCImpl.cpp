@@ -71,19 +71,19 @@ void gc::GC::WaitFinalizers(int64_t epoch) noexcept {
     impl_->state_.waitEpochFinalized(epoch);
 }
 
-PERFORMANCE_INLINE void gc::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {
+PERFORMANCE_INLINE void gc::GC::beforeHeapRefUpdate(mm::DirectRefAccessor ref, ObjHeader* value, bool loadAtomic) noexcept {
     barriers::beforeHeapRefUpdate(ref, value, loadAtomic);
 }
 
-PERFORMANCE_INLINE OBJ_GETTER(gc::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
+PERFORMANCE_INLINE OBJ_GETTER(gc::GC::weakRefReadBarrier, std_support::atomic_ref<ObjHeader*> weakReferee) noexcept {
     RETURN_OBJ(gc::barriers::weakRefReadBarrier(weakReferee));
 }
 
-PERFORMANCE_INLINE bool gc::isMarked(ObjHeader* object) noexcept {
+PERFORMANCE_INLINE bool gc::GC::isMarked(ObjHeader* object) noexcept {
     return alloc::objectDataForObject(object).marked();
 }
 
-PERFORMANCE_INLINE bool gc::tryResetMark(GC::ObjectData& objectData) noexcept {
+PERFORMANCE_INLINE bool gc::GC::tryResetMark(GC::ObjectData& objectData) noexcept {
     return objectData.tryResetMark();
 }
 

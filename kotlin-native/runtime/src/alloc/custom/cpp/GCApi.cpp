@@ -41,7 +41,7 @@ std::atomic<size_t> allocatedBytesCounter;
 bool kotlin::alloc::ObjectSweepTraits::trySweepElement(uint8_t* object, FinalizerQueue& finalizerQueue, ObjectSweepTraits::GCSweepScope& gcHandle) noexcept {
     auto* heapObject = reinterpret_cast<CustomHeapObject*>(object);
     auto size = CustomAllocator::GetAllocatedHeapSize(heapObject->object());
-    if (gc::tryResetMark(heapObject->heapHeader())) {
+    if (gc::GC::tryResetMark(heapObject->heapHeader())) {
         CustomAllocDebug("SweepObject(%p): still alive", heapObject);
         gcHandle.addKeptObject(size);
         return false;
