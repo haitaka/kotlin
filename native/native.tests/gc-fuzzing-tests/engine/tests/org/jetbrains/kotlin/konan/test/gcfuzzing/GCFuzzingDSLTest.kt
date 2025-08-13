@@ -39,7 +39,7 @@ private fun assertDirectoriesEqual(expected: java.io.File, actual: java.io.File)
 @EnforcedProperty(property = ClassLevelProperty.EXECUTION_TIMEOUT, propertyValue = "1m")
 class GCFuzzingDSLTest : AbstractNativeSimpleTest() {
     private val testDataDir =
-        ForTestCompileRuntime.transformTestDataPath("native/native.tests/gc-fuzzing-tests/testData/gcFuzzingDSLTest").absoluteFile
+        ForTestCompileRuntime.transformTestDataPath("native/native.tests/gc-fuzzing-tests/engine/testData/gcFuzzingDSLTest").absoluteFile
 
     private fun runTest(name: String, program: Program) {
         val output = program.translate()

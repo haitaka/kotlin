@@ -13,16 +13,15 @@ interface Distribution<T> {
 
     companion object {
         fun <T> uniform(vararg discreteValues: T): Distribution<T> = object : Distribution<T> {
-            override fun next(random: Random): T {
-                val idx = random.nextInt(0, discreteValues.size)
-                return discreteValues[idx]
-            }
+            override fun next(random: Random): T = discreteValues.random(random)
         }
 
         inline fun <reified T : Enum<T>> uniform(): Distribution<T> = uniform(*enumValues<T>())
 
         inline fun <reified T> weighted(vararg variants: Pair<T, Int>): Distribution<T> =
-            uniform(*(variants.map { it.first }.toTypedArray()))
+            uniform(*(variants.flatMap { (variant, weight) ->
+                List(weight) { variant }
+            }.toTypedArray()))
 
         fun uniformalBetween(from: Int, until: Int): Distribution<Int> = CumulativeFun.uniform(
             0.0 to from,
@@ -44,9 +43,12 @@ fun interface CumulativeFun<T> : Distribution<T> {
             override fun quantile(p: Double): Int {
                 val sortedAnchors = anchors.sortedBy { it.first }
                 val greaterIndex = sortedAnchors.indexOfFirst { it.first > p }
-                val from = sortedAnchors[greaterIndex - 1].second
-                val to = sortedAnchors[greaterIndex].second
-                return (from + p * (to - from)).roundToInt()
+                val from = sortedAnchors[greaterIndex - 1]
+                val to = sortedAnchors[greaterIndex]
+                val valDiff = to.second - from.second
+                val pDiff = to.first - from.first
+                val wantedPDiff = p - from.first
+                return (from.second + wantedPDiff * valDiff / pDiff).roundToInt()
             }
         }
     }

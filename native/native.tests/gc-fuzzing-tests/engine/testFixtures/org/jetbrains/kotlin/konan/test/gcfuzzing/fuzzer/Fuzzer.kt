@@ -30,8 +30,5 @@ fun AbstractNativeSimpleTest.execute(id: ProgramId) {
 
 class SimpleFuzzer(seed: Int = 0) {
     private val random = Random(seed)
-
-    fun AbstractNativeSimpleTest.runNextStep() {
-        execute(ProgramId.Initial(random.nextUInt()))
-    }
+    fun nextStepId() = ProgramId.Initial(random.nextUInt())
 }

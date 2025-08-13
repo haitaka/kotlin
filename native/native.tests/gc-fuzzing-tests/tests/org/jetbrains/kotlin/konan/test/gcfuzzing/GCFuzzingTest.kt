@@ -9,6 +9,10 @@ import org.jetbrains.kotlin.konan.test.blackbox.AbstractNativeSimpleTest
 import org.jetbrains.kotlin.konan.test.gcfuzzing.fuzzer.*
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
+import java.util.stream.Stream
+import kotlin.time.TimeSource
+import kotlin.streams.asStream
+import kotlin.time.Duration
 
 class GCFuzzingTest : AbstractNativeSimpleTest() {
 
@@ -27,16 +31,19 @@ class GCFuzzingTest : AbstractNativeSimpleTest() {
 
 
     @TestFactory
-    fun simpleFuzz(): Collection<DynamicTest> {
-        val steps = 100
+    fun simpleFuzz(): Stream<DynamicTest> {
+        val timelimit = Duration.parse(System.getProperty("gcfuzzing.timelimit")!!)
+        val start = TimeSource.Monotonic.markNow()
 
-        with(SimpleFuzzer(0)) {
-            return List(steps) {
-                DynamicTest.dynamicTest("step $it") {
-                    runNextStep()
-                }
+        val fuzzer = SimpleFuzzer(0)
+        var stepCounter = 0
+        return generateSequence {
+            if (start.elapsedNow() > timelimit) return@generateSequence null
+            val stepId = fuzzer.nextStepId()
+            DynamicTest.dynamicTest("step #${stepCounter++} ($stepId)") {
+                execute(stepId)
             }
-        }
+        }.asStream()
     }
 
 }
