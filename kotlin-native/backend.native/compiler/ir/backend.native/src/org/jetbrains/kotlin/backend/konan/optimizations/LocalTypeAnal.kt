@@ -138,8 +138,8 @@ internal class LocalTypeAnalOpt(val context: Context) : BodyLoweringPass {
             // FIXME?
             return (x.keys + y.keys).associateWith {
                 taLattice.join(
-                        x[it] ?: NoValue,
-                        y[it] ?: NoValue
+                        x[it] ?: taLattice.bottom,
+                        y[it] ?: taLattice.bottom
                 )
             }
         }
@@ -183,17 +183,14 @@ internal class LocalTypeAnalOpt(val context: Context) : BodyLoweringPass {
                     return lattice.meetAll(branchResults + elseResult)
                 }
 
-                override fun visitConstructorCall(expression: IrConstructorCall, data: Map<IrElement, TypeApprox>): Map<IrElement, TypeApprox> {
-                    return super.visitConstructorCall(expression, data) + mapOf(
-
-                    )
-                }
-                override fun visitCall(expression: IrCall, data: Map<IrElement, TypeApprox>): Map<IrElement, TypeApprox> {
-
-                }
+//                override fun visitConstructorCall(expression: IrConstructorCall, data: Map<IrElement, TypeApprox>): Map<IrElement, TypeApprox> {
+//                    return super.visitConstructorCall(expression, data) + mapOf(
+//
+//                    )
+//                }
             }
 
-            container.accept(typeAnalysis)
+            container.accept(typeAnalysis, valuesLattice.top)
 
             println()
             println(typeAnalysis.returnedStates)
