@@ -33,6 +33,7 @@ import org.jetbrains.kotlin.ir.expressions.IrSuspensionPoint
 import org.jetbrains.kotlin.ir.inline.*
 import org.jetbrains.kotlin.backend.konan.lower.NativeAssertionWrapperLowering
 import org.jetbrains.kotlin.backend.konan.optimizations.CastsOptimization
+import org.jetbrains.kotlin.backend.konan.optimizations.LocalTypeAnalysis
 import org.jetbrains.kotlin.ir.interpreter.IrInterpreterConfiguration
 import org.jetbrains.kotlin.util.PerformanceManager
 import org.jetbrains.kotlin.util.PhaseType
@@ -479,6 +480,11 @@ private val optimizeCastsPhase = createFileLoweringPhase(
         lowering = { context: Context -> CastsOptimization(context) },
 )
 
+//private val typeAnalysisPhase = createFileLoweringPhase(
+//        name = "TypeAnalysis",
+//        lowering = { context: Context -> LocalTypeAnalysis(context) },
+//)
+
 private val expressionBodyTransformPhase = createFileLoweringPhase(
         ::ExpressionBodyTransformer,
         name = "ExpressionBodyTransformer",
@@ -625,6 +631,7 @@ internal fun KonanConfig.getLoweringsAfterInlining(): LoweringList = listOfNotNu
         objectClassesPhase,
         staticInitializersPhase,
         optimizeCastsPhase.takeIf { this.genericSafeCasts },
+        //typeAnalysisPhase,
         typeOperatorPhase,
         builtinOperatorPhase,
         bridgesPhase,

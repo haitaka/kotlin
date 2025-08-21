@@ -58,6 +58,15 @@ internal val DevirtualizationAnalysisPhase = createSimpleNamedCompilerPhase<Nati
         }
 )
 
+internal val TypeAnalPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
+        name = "TypeAnalPhase",
+        preactions = getDefaultIrActions(),
+        postactions = getDefaultIrActions(),
+        op = { generationState, irModule ->
+            LocalTypeAnalysis(generationState.context).lower(irModule)
+        }
+)
+
 internal data class PreCodegenInlinerInput(
         val irModule: IrModuleFragment,
         val moduleDFG: ModuleDFG,

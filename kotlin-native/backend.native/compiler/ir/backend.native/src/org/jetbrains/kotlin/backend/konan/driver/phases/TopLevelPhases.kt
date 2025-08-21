@@ -539,6 +539,7 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(
     val moduleDFG = BuildDFGPhase.run(module, disable = !optimize)
     RemoveRedundantCallsToStaticInitializersPhase.run(RedundantCallsInput(moduleDFG, module), disable = !enablePreCodegenInliner)
     PreCodegenInlinerPhase.run(PreCodegenInlinerInput(module, moduleDFG), disable = !enablePreCodegenInliner)
+    TypeAnalPhase.run(module, disable = !optimize)
     DevirtualizationAnalysisPhase.run(DevirtualizationAnalysisInput(module, moduleDFG), disable = !optimize)
     // KT-72336: This is more optimal but contradicts with the pre-codegen inliner.
     RemoveRedundantCallsToStaticInitializersPhase.run(RedundantCallsInput(moduleDFG, module), disable = enablePreCodegenInliner || !optimize)

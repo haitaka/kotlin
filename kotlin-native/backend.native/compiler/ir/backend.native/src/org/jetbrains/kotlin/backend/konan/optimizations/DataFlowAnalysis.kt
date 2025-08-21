@@ -35,9 +35,9 @@ interface Semilattice<T> {
      * Must be idempotent, commutative and associative.
      */
     fun meet(x: T, y: T): T
-}
 
-fun <T> Semilattice<T>.meetAll(values: List<T>): T = values.reduce { x, y -> meet(x, y) }
+    fun meetAll(values: List<T>): T = values.reduce { x, y -> meet(x, y) }
+}
 
 private fun <K, T> MutableMap<K, T>.meetOrInsert(key: K, lattice: Semilattice<T>, value: T) {
     this[key] = lattice.meet(this[key] ?: lattice.top, value)
@@ -86,8 +86,8 @@ abstract class ForwardDataFlowAnalysis<T>(val lattice: Semilattice<T>) : IrVisit
         return lattice.meetAll(branchResults + elseResult)
     }
 
-    final override fun visitWhileLoop(loop: IrWhileLoop, data: T): T = super.visitWhileLoop(loop, data)
-    final override fun visitDoWhileLoop(loop: IrDoWhileLoop, data: T): T = super.visitDoWhileLoop(loop, data)
+//    override fun visitWhileLoop(loop: IrWhileLoop, data: T): T = super.visitWhileLoop(loop, data)
+//    override fun visitDoWhileLoop(loop: IrDoWhileLoop, data: T): T = super.visitDoWhileLoop(loop, data)
 
     override fun visitLoop(loop: IrLoop, data: T): T {
         continuedStates[loop] = lattice.top
@@ -132,7 +132,7 @@ abstract class ForwardDataFlowAnalysis<T>(val lattice: Semilattice<T>) : IrVisit
 
     override fun visitReturnableBlock(expression: IrReturnableBlock, data: T): T {
         val blockResult = super.visitReturnableBlock(expression, data)
-        return lattice.meet(blockResult, returnedStates[expression.symbol]!!)
+        return lattice.meet(blockResult, returnedStates[expression.symbol] ?: lattice.top)
     }
 
     override fun visitReturn(expression: IrReturn, data: T): T {
