@@ -170,11 +170,8 @@ internal class DebugInfo(override val generationState: NativeGenerationState) : 
 
     fun subroutineType(llvmTargetData: LLVMTargetDataRef, types: List<IrType>): DISubroutineTypeRef = memScoped {
         val diTypes = types.withIndex().map { (idx, type) ->
-            if (idx == 0) {
-                // return type
-                if (type == context.irBuiltIns.unitType || type == context.irBuiltIns.nothingType) return@map null
-            }
-            type.diType(llvmTargetData)
+            if (idx == 0 && type.isVoidAsReturnType()) null
+            else type.diType(llvmTargetData)
         }
         DICreateSubroutineType(builder, allocArrayOf(diTypes), types.size)!!
     }
