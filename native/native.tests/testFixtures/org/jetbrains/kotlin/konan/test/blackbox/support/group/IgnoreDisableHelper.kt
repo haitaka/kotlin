@@ -128,7 +128,6 @@ internal fun Settings.evaluate(directiveValues: List<String?>): Boolean {
                 ClassLevelProperty.GC_TYPE.shortName -> get<GCType>().gc?.let { it.shortcut.uppercase() to GC_TYPE_NAMES }
                 ClassLevelProperty.GC_SCHEDULER.shortName -> get<GCScheduler>().scheduler?.let { it.name to GC_SCHEDULER_NAMES }
                 ClassLevelProperty.ALLOCATOR.shortName -> get<Allocator>().name to ALLOCATOR_NAMES
-                ClassLevelProperty.PAGED_ALLOCATOR.shortName -> get<Allocator>().paged?.let { it to BOOLEAN_NAMES }
                 ClassLevelProperty.USE_THREAD_STATE_CHECKER.shortName -> get<ThreadStateChecker>().name to THREAD_STATE_CHECKER_NAMES
                 TARGET_FAMILY -> get<KotlinNativeTargets>().testTarget.family.name to FAMILY_NAMES
                 TARGET_ARCHITECTURE -> get<KotlinNativeTargets>().testTarget.architecture.name to ARCHITECTURE_NAMES
