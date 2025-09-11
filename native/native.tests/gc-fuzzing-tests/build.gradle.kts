@@ -21,7 +21,6 @@ sourceSets {
 }
 
 projectTests {
-    testData(project.isolated, "testData")
     nativeTestTask(
         "test",
         tag = null,
