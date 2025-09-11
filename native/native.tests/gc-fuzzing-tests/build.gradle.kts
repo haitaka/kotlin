@@ -30,7 +30,7 @@ projectTests {
         // nativeTest sets workingDir to rootDir so here we need to override it
         workingDir = projectDir
 
-        project.findProperty("gcfuzzing.binary")?.let {
+        project.findProperty("gcfuzzing.id")?.let {
             systemProperty("gcfuzzing.id", it)
         }
         systemProperty("gcfuzzing.timelimit", project.findProperty("gcfuzzing.timelimit") ?: "1h")

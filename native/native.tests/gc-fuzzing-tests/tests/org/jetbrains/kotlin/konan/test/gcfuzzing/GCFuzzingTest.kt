@@ -29,7 +29,6 @@ class GCFuzzingTest : AbstractNativeSimpleTest() {
             }
     }
 
-
     @TestFactory
     fun simpleFuzz(): Stream<DynamicTest> {
         val timelimit = Duration.parse(System.getProperty("gcfuzzing.timelimit")!!)
