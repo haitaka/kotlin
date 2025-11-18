@@ -207,6 +207,7 @@ id fun7(int32_t localsCount, id l0) {
 int main() {
    globals = [Globals new];
    allocBlockerUpdater();
+   [KtlibSoftTimeoutTerminator.shared setUp];
    for (int i = 0; i < 100000; ++i) {
        [KtlibKtlibKt mainBody];
    }

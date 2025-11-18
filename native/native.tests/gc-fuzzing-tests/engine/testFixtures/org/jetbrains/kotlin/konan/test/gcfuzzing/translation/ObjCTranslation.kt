@@ -233,6 +233,7 @@ private class ObjCTranslationContext(
             |int main() {
             |   globals = [Globals new];
             |   allocBlockerUpdater();
+            |   [${config.kotlinIdentifierPrefix}SoftTimeoutTerminator.shared setUp];
             |   for (int i = 0; i < ${config.mainLoopRepeatCount}; ++i) {
             |       [${config.kotlinIdentifierPrefix}${config.kotlinGlobalClass} mainBody];
             |   }

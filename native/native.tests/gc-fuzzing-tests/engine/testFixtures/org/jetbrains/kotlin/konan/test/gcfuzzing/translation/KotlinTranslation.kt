@@ -6,6 +6,7 @@
 package org.jetbrains.kotlin.konan.test.gcfuzzing.translation
 
 import org.jetbrains.kotlin.konan.test.gcfuzzing.dsl.*
+import kotlin.time.Duration
 
 class KotlinOutput(
     val filename: String,
@@ -18,6 +19,7 @@ class KotlinConfig(
     val cinteropModuleName: String,
     val moduleName: String,
     val maximumStackDepth: Int,
+    val softTimeout: Duration,
 )
 
 fun Program.produceKotlin(config: KotlinConfig): KotlinOutput {
@@ -69,6 +71,18 @@ private class KotlinTranslationContext(
             |    fun terminateCurrent() {
             |        val future = Worker.current.requestTermination()
             |        processor.executeAfter(0L) { future.result }
+            |    }
+            |}
+            |
+            |object SoftTimeoutTerminator {
+            |    private val terminator = Worker.start()
+            |    fun setUp() {
+            |        terminator.executeAfter(${config.softTimeout.inWholeMicroseconds}L) {
+            |            println("Soft timeout reached")
+            |            kotlin.native.runtime.GC.collect()
+            |            println("Final GC done")
+            |            kotlin.system.exitProcess(0)
+            |        }
             |    }
             |}
             |

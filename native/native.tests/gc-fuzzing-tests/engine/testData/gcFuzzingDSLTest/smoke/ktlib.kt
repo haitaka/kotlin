@@ -30,6 +30,18 @@ object WorkerTerminationProcessor {
     }
 }
 
+object SoftTimeoutTerminator {
+    private val terminator = Worker.start()
+    fun setUp() {
+        terminator.executeAfter(60000000L) {
+            println("Soft timeout reached")
+            kotlin.native.runtime.GC.collect()
+            println("Final GC done")
+            kotlin.system.exitProcess(0)
+        }
+    }
+}
+
 private fun spawnThread(block: () -> Unit) {
    if (!tryRegisterThread())
        return
