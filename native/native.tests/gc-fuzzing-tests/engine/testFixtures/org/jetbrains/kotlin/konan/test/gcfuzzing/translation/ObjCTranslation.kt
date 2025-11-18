@@ -190,7 +190,7 @@ private class ObjCTranslationContext(
             |static void scheduleTermination() {
             |    [NSThread detachNewThreadWithBlock:^{
             |        [NSThread sleepForTimeInterval:${config.softTimeout.toDouble(DurationUnit.SECONDS)}];
-            |        NSLog(@"Soft timeout reached. Requesting termination.");
+            |        NSLog(@"Soft timeout exceeded. Requesting termination.");
             |        terminationRequest = true;
             |        ${config.kotlinIdentifierPrefix}${config.kotlinGlobalClass}.terminationRequest = true;
             |    }];
