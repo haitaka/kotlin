@@ -177,7 +177,9 @@ private class ObjCTranslationContext(
             |}
             |
             |bool updateAllocBlocker() {
+            |    if (terminationRequest) return true;
             |    [allocBlockerLock lock];
+            |    if (terminationRequest) return true;
             |    bool result = allocBlocker ? allocBlockerInNormalMode() : allocBlockerInHazardMode();
             |    allocBlocker = result;
             |    ${config.kotlinIdentifierPrefix}${config.kotlinGlobalClass}.allocBlocker = result;
