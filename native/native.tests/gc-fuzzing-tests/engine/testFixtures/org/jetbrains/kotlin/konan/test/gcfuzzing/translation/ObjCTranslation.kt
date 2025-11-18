@@ -26,6 +26,7 @@ class ObjCConfig(
     val memoryPressureHazardZoneBytes: LongRange,
     val memoryPressureCheckInterval: Duration,
     val basename: String,
+    val softTimeout: Duration,
 )
 
 fun Program.produceObjC(config: ObjCConfig): ObjCOutput {
@@ -100,7 +101,10 @@ private class ObjCTranslationContext(
             |    }];
             |}
             |
+            |static atomic_bool terminationRequest = false;
+            |
             |static inline id call(int32_t localsCount, int32_t blockLocalsCount, id (^block)(int32_t)) {
+            |    if (terminationRequest) return nil;
             |    int32_t nextLocalsCount = localsCount + blockLocalsCount;
             |    if (nextLocalsCount > ${config.maximumStackDepth}) {
             |        return nil;
@@ -181,6 +185,15 @@ private class ObjCTranslationContext(
             |    return result;
             |}
             |
+            |static void scheduleTermination() {
+            |    [NSThread detachNewThreadWithBlock:^{
+            |        [NSThread sleepForTimeInterval:${config.softTimeout.toDouble(DurationUnit.SECONDS)}];
+            |        NSLog(@"Soft timeout reached. Requesting termination.");
+            |        terminationRequest = true;
+            |        ${config.kotlinIdentifierPrefix}${config.kotlinGlobalClass}.terminationRequest = true;
+            |    }];
+            |}
+            |
             |static void allocBlockerUpdater() {
             |    allocBlockerLock = [NSLock new];
             |    [NSThread detachNewThreadWithBlock:^{
@@ -232,9 +245,9 @@ private class ObjCTranslationContext(
             |
             |int main() {
             |   globals = [Globals new];
+            |   scheduleTermination();
             |   allocBlockerUpdater();
-            |   [${config.kotlinIdentifierPrefix}SoftTimeoutTerminator.shared setUp];
-            |   for (int i = 0; i < ${config.mainLoopRepeatCount}; ++i) {
+            |   for (int i = 0; i < ${config.mainLoopRepeatCount} && !terminationRequest; ++i) {
             |       [${config.kotlinIdentifierPrefix}${config.kotlinGlobalClass} mainBody];
             |   }
             |   return 0;

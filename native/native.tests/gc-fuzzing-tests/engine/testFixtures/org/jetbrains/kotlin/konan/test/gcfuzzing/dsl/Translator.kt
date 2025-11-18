@@ -62,8 +62,7 @@ fun Program.translate(config: Config = Config.DEFAULT): Output {
     val kotlinConfig = KotlinConfig(
         cinteropModuleName = cinteropConfig.moduleName,
         maximumStackDepth = config.maximumStackDepth,
-        moduleName = "ktlib",
-        softTimeout = config.softTimeout,
+        moduleName = "ktlib"
     )
     val kotlinModuleCapitalized = kotlinConfig.moduleName.replaceFirstChar { it.uppercase() }
     val objcConfig = ObjCConfig(
@@ -76,7 +75,8 @@ fun Program.translate(config: Config = Config.DEFAULT): Output {
         mainLoopRepeatCount = config.mainLoopRepeatCount,
         memoryPressureHazardZoneBytes = config.memoryPressureHazardZoneBytes,
         memoryPressureCheckInterval = config.memoryPressureCheckInterval,
-        basename = "main"
+        basename = "main",
+        softTimeout = config.softTimeout,
     )
     val cinterop = produceCInterop(cinteropConfig)
     val kotlin = produceKotlin(kotlinConfig)
