@@ -30,18 +30,6 @@ object WorkerTerminationProcessor {
     }
 }
 
-object SoftTimeoutTerminator {
-    private val terminator = Worker.start()
-    fun setUp() {
-        terminator.executeAfter(60000000L) {
-            println("Soft timeout reached")
-            kotlin.native.runtime.GC.collect()
-            println("Final GC done")
-            kotlin.system.exitProcess(0)
-        }
-    }
-}
-
 private fun spawnThread(block: () -> Unit) {
    if (!tryRegisterThread())
        return
@@ -53,6 +41,7 @@ private fun spawnThread(block: () -> Unit) {
 }
 
 private inline fun call(localsCount: Int, blockLocalsCount: Int, block: (Int) -> Any?): Any? {
+    if (terminationRequest) return null
     val nextLocalsCount = localsCount + blockLocalsCount
     if (nextLocalsCount > 200) {
         return null
@@ -61,6 +50,7 @@ private inline fun call(localsCount: Int, blockLocalsCount: Int, block: (Int) ->
 }
 
 var allocBlocker: Boolean = false
+var terminationRequest: Boolean = false
 
 fun performGC() { kotlin.native.runtime.GC.collect() }
 
