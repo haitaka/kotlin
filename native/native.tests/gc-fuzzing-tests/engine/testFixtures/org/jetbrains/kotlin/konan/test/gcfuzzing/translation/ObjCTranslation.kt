@@ -104,7 +104,7 @@ private class ObjCTranslationContext(
             |static atomic_bool terminationRequest = false;
             |
             |static inline id call(int32_t localsCount, int32_t blockLocalsCount, id (^block)(int32_t)) {
-            |    if (terminationRequest) return nil;
+            |    if (atomic_load_explicit(&terminationRequest, memory_order_relaxed)) return nil;
             |    int32_t nextLocalsCount = localsCount + blockLocalsCount;
             |    if (nextLocalsCount > ${config.maximumStackDepth}) {
             |        return nil;
@@ -177,9 +177,9 @@ private class ObjCTranslationContext(
             |}
             |
             |bool updateAllocBlocker() {
-            |    if (terminationRequest) return true;
+            |    if (atomic_load_explicit(&terminationRequest, memory_order_relaxed)) return true;
             |    [allocBlockerLock lock];
-            |    if (terminationRequest) return true;
+            |    if (atomic_load_explicit(&terminationRequest, memory_order_relaxed)) return true;
             |    bool result = allocBlocker ? allocBlockerInNormalMode() : allocBlockerInHazardMode();
             |    allocBlocker = result;
             |    ${config.kotlinIdentifierPrefix}${config.kotlinGlobalClass}.allocBlocker = result;
@@ -249,7 +249,7 @@ private class ObjCTranslationContext(
             |   globals = [Globals new];
             |   scheduleTermination();
             |   allocBlockerUpdater();
-            |   for (int i = 0; i < ${config.mainLoopRepeatCount} && !terminationRequest; ++i) {
+            |   for (int i = 0; i < ${config.mainLoopRepeatCount} && !atomic_load_explicit(&terminationRequest, memory_order_relaxed); ++i) {
             |       [${config.kotlinIdentifierPrefix}${config.kotlinGlobalClass} mainBody];
             |   }
             |   return 0;

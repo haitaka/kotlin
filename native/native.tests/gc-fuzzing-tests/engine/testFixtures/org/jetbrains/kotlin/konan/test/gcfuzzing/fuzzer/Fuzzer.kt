@@ -21,7 +21,6 @@ fun buildProgram(programId: ProgramId): Program = when (programId) {
 fun AbstractNativeSimpleTest.execute(id: ProgramId) {
     val name = id.toString()
     val dslGeneratedDir = resolveDslDir(name)
-    val softTimeout = System.getProperty("gcfuzzing.softTimeout")?.let { Duration.parse(it) } ?: Duration.INFINITE
     val output = buildProgram(id).translate(
         Config(
             maximumStackDepth = Config.DEFAULT.maximumStackDepth,
@@ -29,7 +28,7 @@ fun AbstractNativeSimpleTest.execute(id: ProgramId) {
             maxThreadCount = Config.DEFAULT.maxThreadCount,
             memoryPressureHazardZoneBytes = Config.DEFAULT.memoryPressureHazardZoneBytes,
             memoryPressureCheckInterval = Config.DEFAULT.memoryPressureCheckInterval,
-            softTimeout = softTimeout,
+            softTimeout = System.getProperty("gcfuzzing.softTimeout")?.let { Duration.parse(it) } ?: Config.DEFAULT.softTimeout,
         )
     )
     output.save(dslGeneratedDir)
