@@ -101,6 +101,11 @@ abstract class BasicCompilation<A : TestCompilationArtifact>(
         gcScheduler.compilerFlag?.let { compilerFlag -> add(compilerFlag) }
         allocator.compilerFlag?.let { compilerFlag -> add(compilerFlag) }
 
+        // SIGTERM is what happens to the process when it's killed by a timeout. Generate minidumps in this case to help debug.
+        if (targets.testTarget.family == Family.OSX) {
+            add("-Xbinary=minidumpOnSIGTERM=true")
+        }
+
         // We use dev distribution for tests as it provides a full set of testing utilities,
         // which might not be available in user distribution.
         add("-Xllvm-variant=dev")
