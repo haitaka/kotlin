@@ -101,11 +101,6 @@ abstract class BasicCompilation<A : TestCompilationArtifact>(
         gcScheduler.compilerFlag?.let { compilerFlag -> add(compilerFlag) }
         allocator.compilerFlag?.let { compilerFlag -> add(compilerFlag) }
 
-        // SIGTERM is what happens to the process when it's killed by a timeout. Generate minidumps in this case to help debug.
-        if (targets.testTarget.family == Family.OSX) {
-            add("-Xbinary=minidumpOnSIGTERM=true")
-        }
-
         // We use dev distribution for tests as it provides a full set of testing utilities,
         // which might not be available in user distribution.
         add("-Xllvm-variant=dev")
@@ -127,6 +122,15 @@ abstract class BasicCompilation<A : TestCompilationArtifact>(
                 !(isSmallBinaryEnabled && optimizationMode == OptimizationMode.DEBUG)
             }
             .forEach { add(it.asCompilerCliArgument()) }
+    }
+
+    protected fun ArgsBuilder.applyMinidumpArgs() {
+        add("-Xbinary=minidumpLocation=${expectedArtifact.logFile.parentFile.absolutePath}")
+
+        // SIGTERM is what happens to the process when it's killed by a timeout. Generate minidumps in this case to help debug.
+        if (targets.testTarget.family == Family.OSX) {
+            add("-Xbinary=minidumpOnSIGTERM=true")
+        }
     }
 
     protected abstract fun applySpecificArgs(argsBuilder: ArgsBuilder)
@@ -414,8 +418,8 @@ class ObjCFrameworkCompilation(
         add(
             "-produce", "framework",
             "-output", expectedArtifact.frameworkDir.absolutePath,
-            "-Xbinary=minidumpLocation=${expectedArtifact.logFile.parentFile.absolutePath}",
         )
+        applyMinidumpArgs()
         super.applySpecificArgs(argsBuilder)
     }
 
@@ -695,8 +699,7 @@ abstract class FinalBinaryCompilation<A : TestCompilationArtifact>(
 
     override fun applySpecificArgs(argsBuilder: ArgsBuilder) {
         super.applySpecificArgs(argsBuilder)
-
-        argsBuilder.add("-Xbinary=minidumpLocation=${expectedArtifact.logFile.parentFile.absolutePath}")
+        argsBuilder.applyMinidumpArgs()
     }
 }
 
