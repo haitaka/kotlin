@@ -39,7 +39,6 @@
 #include <config.h>  // Must come first
 #endif
 
-#include <dirent.h>
 #include <mach-o/arch.h>
 #include <stdio.h>
 #include <string.h>
@@ -47,6 +46,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <fstream>
 #include <iostream>
 #include <limits>
