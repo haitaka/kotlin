@@ -25,7 +25,7 @@ namespace {
 void minidumpSigaction(int sig, siginfo_t*, void*) {
     konan::consoleErrorf("Signal %s received. Generating minidump.\n", sys_signame[sig]);
     kotlin::writeMinidump();
-    exit(1);
+    _exit(EXIT_FAILURE);
 }
 
 bool installMinidumpSigaction() {
@@ -97,6 +97,8 @@ void kotlin::crashHandlerInit() noexcept {
             bool installed = installMinidumpSigaction();
             if (installed) {
                 RuntimeLogInfo({logging::Tag::kRT}, "SIGTERM sigaction installed");
+            } else {
+                RuntimeLogWarning({logging::Tag::kRT}, "Failed to install SIGTERM sigaction");
             }
         }
 
