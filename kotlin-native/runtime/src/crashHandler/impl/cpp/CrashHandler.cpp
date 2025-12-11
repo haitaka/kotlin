@@ -31,7 +31,6 @@ void minidumpSigaction(int sig, siginfo_t*, void*) {
 bool installMinidumpSigaction() {
     auto signal = SIGTERM;
     struct sigaction sa{};
-    memset(&sa, 0, sizeof(sa));
     sigemptyset(&sa.sa_mask);
     sigaddset(&sa.sa_mask, signal);
     sa.sa_sigaction = minidumpSigaction;
@@ -98,7 +97,7 @@ void kotlin::crashHandlerInit() noexcept {
             if (installed) {
                 RuntimeLogInfo({logging::Tag::kRT}, "SIGTERM sigaction installed");
             } else {
-                RuntimeLogWarning({logging::Tag::kRT}, "Failed to install SIGTERM sigaction");
+                RuntimeLogWarning({logging::Tag::kRT}, "Failed to install SIGTERM sigaction: %s", std::strerror(errno));
             }
         }
 
