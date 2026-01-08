@@ -31,8 +31,8 @@ projectTests {
         workingDir = projectDir
 
         // The test id for `executeSingle`. Use for debugging.
-        project.findProperty("gcfuzzing.id")?.let {
-            systemProperty("gcfuzzing.id", it)
+        project.findProperty("gcfuzzing.single.id")?.let {
+            systemProperty("gcfuzzing.single.id", it)
         }
         // The timeout for a single fuzzer test. After the time is out the test will try to do one final GC a nd kill itself gracefully.
         // Should be lower than `kn.executionTimeout`.

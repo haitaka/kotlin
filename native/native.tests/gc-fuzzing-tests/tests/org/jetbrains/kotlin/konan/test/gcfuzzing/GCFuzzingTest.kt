@@ -17,20 +17,18 @@ import kotlin.time.Duration
 class GCFuzzingTest : AbstractNativeSimpleTest() {
 
     @TestFactory
-    fun executeSingle(): Collection<DynamicTest> {
-        return listOfNotNull(System.getProperty("gcfuzzing.id"))
-            .mapNotNull {
-                ProgramId.fromString(it)
-            }
-            .mapNotNull {
-                DynamicTest.dynamicTest("$it") {
-                    execute(it)
-                }
-            }
-    }
+    fun simple(): Stream<DynamicTest> {
+        val executeSingleId = System.getProperty("gcfuzzing.single.id")
+        if (executeSingleId != null) {
+            return listOfNotNull(ProgramId.fromString(executeSingleId))
+                .mapNotNull {
+                    DynamicTest.dynamicTest("$it") {
+                        execute(it)
+                    }
+                }.stream()
+        }
 
-    @TestFactory
-    fun simpleFuzz(): Stream<DynamicTest> {
+
         val timelimit = Duration.parse(System.getProperty("gcfuzzing.timelimit")!!)
         val start = TimeSource.Monotonic.markNow()
 
