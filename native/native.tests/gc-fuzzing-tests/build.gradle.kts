@@ -30,7 +30,7 @@ projectTests {
         // nativeTest sets workingDir to rootDir so here we need to override it
         workingDir = projectDir
 
-        // The test id for `executeSingle`. Use for debugging.
+        // If set, execute a single test with the given id instead of the fuzzing process.
         project.findProperty("gcfuzzing.single.id")?.let {
             systemProperty("gcfuzzing.single.id", it)
         }

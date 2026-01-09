@@ -12,6 +12,7 @@ import org.junit.jupiter.api.TestFactory
 import java.util.stream.Stream
 import kotlin.time.TimeSource
 import kotlin.streams.asStream
+import kotlin.test.fail
 import kotlin.time.Duration
 
 class GCFuzzingTest : AbstractNativeSimpleTest() {
@@ -20,7 +21,8 @@ class GCFuzzingTest : AbstractNativeSimpleTest() {
     fun simple(): Stream<DynamicTest> {
         val executeSingleId = System.getProperty("gcfuzzing.single.id")
         if (executeSingleId != null) {
-            return listOfNotNull(ProgramId.fromString(executeSingleId))
+            val id = ProgramId.fromString(executeSingleId) ?: fail("Invalid program ID \"$executeSingleId\"")
+            return listOfNotNull(id)
                 .mapNotNull {
                     DynamicTest.dynamicTest("$it") {
                         execute(it)
