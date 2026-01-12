@@ -22,12 +22,9 @@ class GCFuzzingTest : AbstractNativeSimpleTest() {
         val executeSingleId = System.getProperty("gcfuzzing.single.id")
         if (executeSingleId != null) {
             val id = ProgramId.fromString(executeSingleId) ?: fail("Invalid program ID \"$executeSingleId\"")
-            return listOfNotNull(id)
-                .mapNotNull {
-                    DynamicTest.dynamicTest("$it") {
-                        execute(it)
-                    }
-                }.stream()
+            return listOf(DynamicTest.dynamicTest("$id") {
+                execute(id)
+            }).stream()
         }
 
 
