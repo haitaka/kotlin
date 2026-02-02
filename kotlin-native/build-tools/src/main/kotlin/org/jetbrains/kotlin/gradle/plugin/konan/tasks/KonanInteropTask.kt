@@ -69,7 +69,14 @@ private abstract class KonanInteropOutOfProcessAction @Inject constructor(
         val cinterop = parameters.compilerDistributionRoot.asNativeDistribution().get().cinterop
         execOperations.exec {
             if (PlatformInfo.isWindows()) {
-                commandLine("cmd.exe", "/d", "/c", cinterop, *parameters.args.get().toTypedArray())
+                val args = parameters.args.get().map { arg ->
+                    if ("=" in arg || ":" in arg || ";" in arg) {
+                        "\"$arg\""
+                    } else {
+                        arg
+                    }
+                }
+                commandLine("cmd.exe", "/d", "/c", cinterop, *args.toTypedArray())
             } else {
                 commandLine(cinterop, *parameters.args.get().toTypedArray())
             }
