@@ -70,7 +70,12 @@ private abstract class KonanInteropOutOfProcessAction @Inject constructor(
         execOperations.exec {
             if (PlatformInfo.isWindows()) {
                 val args = parameters.args.get().map { arg ->
-                    if ("=" in arg || ":" in arg || ";" in arg) {
+                    // Some sources claim that these are the characters cmd.exe considers as argument delimiters.
+                    // Some of them, namely "=" and ",", are especially likely to be encountered in Kotlin interop options.
+                    val delimiters = listOf(" ", "\t", ",", ";", "=")
+                    // Quote arguments containing known delimiters.
+                    // cmd.exe's ways are incomprehensible – this is probably an incomplete solution.
+                    if (delimiters.any { it in arg }) {
                         "\"$arg\""
                     } else {
                         arg
