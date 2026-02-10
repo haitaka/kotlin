@@ -72,7 +72,7 @@ class ObjCExportMapperTest : InlineSourceTestEnvironment {
                 namer = objcExportNamer,
                 problemCollector = ObjCExportProblemCollector.SILENT,
                 objcGenerics = true,
-                objcExportBlockExplicitParameterNames = true,
+                objcExportBlockExplicitParameterNames = false,
                 shouldExportKDoc = false,
                 additionalImports = emptyList()
             ),
