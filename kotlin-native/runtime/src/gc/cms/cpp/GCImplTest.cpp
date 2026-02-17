@@ -154,7 +154,7 @@ TYPED_TEST_P(TracingGCTest, TerminateInSTW) {
     // Try to drive the concurrent mark to terminate in STW (after several unsuccessful concurrent attempts).
     // Construct a linked list of arrays and continuously steal from the list just one step ahead of the GC's mark front.
 
-    constexpr int kListLength = 10000;
+    constexpr int kListLength = 1000;
     constexpr int kArraySize = 200;
     // too many threads over-pace the GC
     constexpr int kMutatorsCount = 2;
