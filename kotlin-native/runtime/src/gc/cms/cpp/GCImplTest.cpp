@@ -159,11 +159,11 @@ TYPED_TEST_P(TracingGCTest, TerminateInSTW) {
     // too many threads over-pace the GC
     constexpr int kMutatorsCount = 2;
 
-    auto gcDone = std::atomic{false};
-    auto ready = std::atomic{0};
+    std::atomic gcDone = false;
+    std::atomic ready = 0;
 
-    auto mutators = std::vector<Mutator>{kMutatorsCount};
-    auto futures = std::vector<std::future<void>>{};
+    std::vector<Mutator> mutators{kMutatorsCount};
+    std::vector<std::future<void>> futures{};
     for (auto& mutator : mutators) {
         futures.emplace_back(mutator.Execute([&ready, &gcDone](mm::ThreadData& threadData, Mutator&mutator) {
             //prepare
@@ -184,9 +184,7 @@ TYPED_TEST_P(TracingGCTest, TerminateInSTW) {
             mm::safePoint(threadData);
 
             // run
-            //int iter = 0;
             while (!gcDone.load(std::memory_order_relaxed)) {
-                //fprintf(stderr, "iter %lu %i\n", threadData.threadId(), iter++);
                 auto* nextPtr = local->field1.accessor().load()->array();
                 if (nextPtr == nullptr) break;
 
@@ -198,7 +196,6 @@ TYPED_TEST_P(TracingGCTest, TerminateInSTW) {
                 while (!mm::test_support::safePointsAreActive() && !gcDone.load(std::memory_order_relaxed)) {}
                 mm::safePoint(threadData);
             }
-            //fprintf(stderr, "done %lu\n", threadData.threadId());
 
             // let the GC catch up if we were too fast
             while (!gcDone) {
