@@ -83,29 +83,33 @@ void gc::mark::ConcurrentMark::markInSTW() {
     // The number of batches shared inside a parallel processor may only grow,
     // we use this number to decide when to finish the mark.
     auto everSharedBatches = parallelProcessor_->batchesEverShared();
-    size_t iter = 0;
-    bool terminateInSTW = false;
-    do {
-        if (iter == compiler::concurrentMarkMaxIterations()) {
-            GCLogWarning(gcHandle().getEpoch(), "Finishing mark closure in STW after (%zu concurrent attempts)", iter);
-            stopTheWorld(gcHandle(), "GC stop the world: concurrent mark took too long");
-            terminateInSTW = true;
-            flushMutatorQueues();
-            Mark<MarkTraits>(gcHandle(), mainWorker);
-            // Weak processing expects barriers in the correct state even in STW
-            barriers::switchToWeakProcessingBarriers();
+
+    bool terminateInSTW = true;
+    for (uint iter = 0; iter < compiler::concurrentMarkMaxIterations(); ++iter) {
+        GCLogDebug(gcHandle().getEpoch(), "Building mark closure (attempt #%u)", iter);
+        Mark<MarkTraits>(gcHandle(), mainWorker);
+        if (tryTerminateMark(everSharedBatches)) {
+            terminateInSTW = false; // successfully terminated mark phase concurrently
             break;
         }
-
-        GCLogDebug(gcHandle().getEpoch(), "Building mark closure (attempt #%zu)", iter);
+    }
+    if (terminateInSTW) {
+        GCLogWarning(gcHandle().getEpoch(), "Finishing mark closure in STW after %u concurrent attempts",
+            compiler::concurrentMarkMaxIterations());
+        stopTheWorld(gcHandle(), "GC stop the world: concurrent mark took too long");
+        flushMutatorQueues(); // No need for mark termination lock: STW is stronger than it
         Mark<MarkTraits>(gcHandle(), mainWorker);
+        // Weak processing expects barriers in the correct state even in STW
+        barriers::switchToWeakProcessingBarriers();
 
-        ++iter;
-    } while (!tryTerminateMark(everSharedBatches));
+        gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle(), mm::ExternalRCRefRegistry::instance());
 
-    // By this point mutator mark queues may not be populated anymore.
-    // However, some threads may still try to enqueue a marked object before they observe the barrier disablement.
-    // Thus, mark queue destruction takes place only later below.
+        stopTheWorld(gcHandle(), "GC stop the world: prepare to sweep");
+    }
+
+    // By this point mutator mark queues cannot be populated anymore.
+    // However, some threads may still try to enqueue a marked object before they observe the barriers were disabled.
+    // Thus, mark queue destruction takes place only later below (in STW).
 
     gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle(), mm::ExternalRCRefRegistry::instance());
 
