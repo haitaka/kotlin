@@ -137,8 +137,9 @@ extern "C" id Kotlin_ObjCExport_CreateRetainedNSStringFromKString(ObjHeader* str
       length:header->size()
       encoding:Kotlin_StringEncoding_ToNSStringEncoding(header->encoding())];
 
+    id old = AtomicCompareAndSwapAssociatedObject(str, nullptr, candidate);
     NativeOrUnregisteredThreadGuard guard(/*reentrant=*/ true);
-    if (id old = AtomicCompareAndSwapAssociatedObject(str, nullptr, candidate)) {
+    if (old) {
       objc_release(candidate);
       return objc_retain(old);
     }

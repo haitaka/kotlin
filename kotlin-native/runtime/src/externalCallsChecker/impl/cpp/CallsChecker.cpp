@@ -251,7 +251,6 @@ extern "C" const char* Kotlin_callsCheckerGoodFunctionNames[] = {
         "llvm.memset.*",
         "llvm.objc.autorelease",
         "llvm.objc.autoreleaseReturnValue",
-        "llvm.objc.retain",
         "llvm.vector.*",
         "llvm.objectsize.*",
         "llvm.pow.*",
