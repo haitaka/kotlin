@@ -20,6 +20,7 @@ import org.jetbrains.kotlin.dependencies.NativeDependenciesExtension
 import org.jetbrains.kotlin.dependencies.NativeDependenciesPlugin
 import org.jetbrains.kotlin.konan.target.HostManager.Companion.hostIsMac
 import org.jetbrains.kotlin.konan.target.HostManager.Companion.hostIsMingw
+import org.jetbrains.kotlin.utils.reproducibilityCompilerFlags
 import org.jetbrains.kotlin.utils.reproduciblySortedFilePaths
 import java.io.File
 import javax.inject.Inject
@@ -251,9 +252,7 @@ open class NativeToolsExtension(val project: Project) {
      * absolute paths.
      */
     val reproducibilityCompilerFlags: Array<String>
-        get() = reproducibilityRootsMap.map {
-            "-ffile-prefix-map=${it.key}=${it.value}"
-        }.toTypedArray()
+        get() = reproducibilityCompilerFlags(reproducibilityRootsMap).toTypedArray()
 
     /**
      * Whenever a `FileCollection` is passed as arguments, it's order must be stable sorted for reproducibility.

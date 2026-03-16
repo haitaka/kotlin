@@ -221,8 +221,14 @@ open class CompileToBitcodeExtension @Inject constructor(val project: Project) :
         private val platformManager = project.extensions.getByType<PlatformManager>()
         private val nativeDependencies = project.extensions.getByType<NativeDependenciesExtension>()
 
+        // This is copied from `NativePlugin`
         private val reproducibilityRootsMap: Map<File, String>
             get() = mapOf(
+                    // This applies for both sources of the current project, and dependencies on other
+                    // projects inside the repo.
+                    project.isolated.rootProject.let {
+                        it.projectDirectory.asFile to it.name
+                    },
                     // This is the common root for native dependencies: sysroots, llvm, ...
                     nativeDependencies.nativeDependenciesRoot to "NATIVE_DEPS",
             )
