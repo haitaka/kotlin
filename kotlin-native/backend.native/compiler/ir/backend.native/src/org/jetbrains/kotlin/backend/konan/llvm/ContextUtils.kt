@@ -528,6 +528,7 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     val vector128Type = LLVMVectorType(floatType, 4)!!
     val voidType = LLVMVoidTypeInContext(llvmContext)!!
     val pointerType = runtime.pointerType
+    val objPointerType = runtime.objPointerType
 
     fun structType(vararg types: LLVMTypeRef): LLVMTypeRef = structType(types.toList())
 

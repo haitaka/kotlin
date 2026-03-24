@@ -1541,7 +1541,7 @@ internal class CodeGeneratorVisitor(
             onCheck: (argument: LLVMValueRef, checkResult: LLVMValueRef) -> LLVMValueRef,
     ) : LLVMValueRef {
         val srcArg = evaluateExpression(value.argument, resultSlot)
-        require(srcArg.type == llvm.pointerType) { "Expected ObjHeader but was ${llvmtype2string(srcArg.type)} for ${value.argument.dump()}" }
+        require(srcArg.type == llvm.objPointerType) { "Expected ObjHeader but was ${llvmtype2string(srcArg.type)} for ${value.argument.dump()}" }
         val srcType = value.argument.type
         val isSuperClassCast = srcType.isSuperClassCastTo(dstClass)
 
@@ -1780,7 +1780,7 @@ internal class CodeGeneratorVisitor(
         val alignment: Int
         if (thisPtr != null) {
             require(!value.symbol.owner.isStatic) { "Unexpected receiver for a static field: ${value.render()}" }
-            require(thisPtr.type == llvm.pointerType) {
+            require(thisPtr.type == llvm.objPointerType) {
                 LLVMPrintTypeToString(thisPtr.type)?.toKString().toString()
             }
             address = fieldPtrOfClass(thisPtr, value.symbol.owner)
@@ -1882,7 +1882,7 @@ internal class CodeGeneratorVisitor(
                     if (value.value.kind == IrConstKind.Null) {
                         Zero(value.type.toLLVMType(llvm))
                     } else {
-                        require(value.type.toLLVMType(llvm) == llvm.pointerType) {
+                        require(value.type.toLLVMType(llvm) == llvm.objPointerType) {
                             "Can't wrap ${value.value.kind.asString} constant to type ${value.type.render()}"
                         }
                         value.toBoxCacheValue(generationState) ?: codegen.staticData.createConstKotlinObject(
@@ -1959,7 +1959,7 @@ internal class CodeGeneratorVisitor(
                     }
                 }
 
-                require(value.type.toLLVMType(llvm) == llvm.pointerType) { "Constant object is not an object, but ${value.type.render()}" }
+                require(value.type.toLLVMType(llvm) == llvm.objPointerType) { "Constant object is not an object, but ${value.type.render()}" }
                 codegen.staticData.createConstKotlinObject(
                         constructedClass,
                         *fields.toTypedArray()

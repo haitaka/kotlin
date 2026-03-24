@@ -51,6 +51,8 @@ internal class Runtime(
     val arrayHeaderType = getStructType("ArrayHeader")
     val stringHeaderType = getStructType("StringHeader")
 
+    val objPointerType = LLVMPointerType(objHeaderType, 0)!!
+
     val frameOverlayType = getStructType("FrameOverlay")
 
     val initNodeType = getStructType("InitNode")
