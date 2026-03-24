@@ -21,6 +21,7 @@ import org.jetbrains.kotlin.dependencies.NativeDependenciesPlugin
 import org.jetbrains.kotlin.konan.target.HostManager.Companion.hostIsMac
 import org.jetbrains.kotlin.konan.target.HostManager.Companion.hostIsMingw
 import org.jetbrains.kotlin.utils.reproducibilityCompilerFlags
+import org.jetbrains.kotlin.utils.reproducibilityRootsMap
 import org.jetbrains.kotlin.utils.reproduciblySortedFilePaths
 import java.io.File
 import javax.inject.Inject
@@ -235,17 +236,7 @@ open class NativeToolsExtension(val project: Project) {
         }
 
     private val reproducibilityRootsMap: Map<File, String>
-        get() = mapOf(
-                // This applies for both sources of the current project, and dependencies on other
-                // projects inside the repo.
-                project.isolated.rootProject.let {
-                    it.projectDirectory.asFile to it.name
-                },
-                // This is the common root for native dependencies: sysroots, llvm, ...
-                nativeDependenciesExtension.nativeDependenciesRoot to "NATIVE_DEPS",
-                // Not every user of `NativePlugin` uses JNI, but there's no harm to keep it for all.
-                jdkDir to "JDK",
-        )
+        get() = reproducibilityRootsMap(project, nativeDependenciesExtension, jdkDir)
 
     /**
      * Use these flags for `clang` invocations, so that the generated binaries do not contain

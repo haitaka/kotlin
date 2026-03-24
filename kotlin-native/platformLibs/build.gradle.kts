@@ -99,10 +99,7 @@ enabledTargets(platformManager).forEach { target ->
 
             val nativeDependenciesExtension = project.extensions.getByType<NativeDependenciesExtension>()
             val reproducibilityCompilerFlags = reproducibilityCompilerFlags(project, nativeDependenciesExtension).flatMap {
-                listOf(
-                        "-compiler-option",
-                        it
-                )
+                listOf("-compiler-option", it)
             }.toTypedArray()
 
             this.extraOpts.addAll(

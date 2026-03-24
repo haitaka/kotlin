@@ -32,6 +32,7 @@ import org.jetbrains.kotlin.konan.target.*
 import org.jetbrains.kotlin.nativeDistribution.nativeProtoDistribution
 import org.jetbrains.kotlin.resolveLlvmUtility
 import org.jetbrains.kotlin.utils.capitalized
+import org.jetbrains.kotlin.utils.reproducibilityRootsMap
 import java.io.File
 import java.time.Duration
 import javax.inject.Inject
@@ -221,17 +222,8 @@ open class CompileToBitcodeExtension @Inject constructor(val project: Project) :
         private val platformManager = project.extensions.getByType<PlatformManager>()
         private val nativeDependencies = project.extensions.getByType<NativeDependenciesExtension>()
 
-        // This is copied from `NativePlugin`
         private val reproducibilityRootsMap: Map<File, String>
-            get() = mapOf(
-                    // This applies for both sources of the current project, and dependencies on other
-                    // projects inside the repo.
-                    project.isolated.rootProject.let {
-                        it.projectDirectory.asFile to it.name
-                    },
-                    // This is the common root for native dependencies: sysroots, llvm, ...
-                    nativeDependencies.nativeDependenciesRoot to "NATIVE_DEPS",
-            )
+            get() = reproducibilityRootsMap(project, nativeDependencies)
 
         private val allCompilerArgs = module.compilerArgs.map {
             it + when (sanitizer) {
