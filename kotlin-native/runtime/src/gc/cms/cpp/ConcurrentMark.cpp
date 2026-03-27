@@ -85,7 +85,7 @@ void gc::mark::ConcurrentMark::markInSTW() {
     auto everSharedBatches = parallelProcessor_->batchesEverShared();
 
     bool terminateInSTW = true;
-    for (uint iter = 0; iter < compiler::concurrentMarkMaxIterations(); ++iter) {
+    for (uint32_t iter = 0; iter < compiler::concurrentMarkMaxIterations(); ++iter) {
         GCLogDebug(gcHandle().getEpoch(), "Building mark closure (attempt #%u)", iter);
         Mark<MarkTraits>(gcHandle(), mainWorker);
         if (tryTerminateMark(everSharedBatches)) {
