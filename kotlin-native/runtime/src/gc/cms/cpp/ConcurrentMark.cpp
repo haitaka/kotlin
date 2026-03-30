@@ -101,10 +101,6 @@ void gc::mark::ConcurrentMark::markInSTW() {
         Mark<MarkTraits>(gcHandle(), mainWorker);
         // Weak processing expects barriers in the correct state even in STW
         barriers::switchToWeakProcessingBarriers();
-
-        gc::processWeaks<DefaultProcessWeaksTraits>(gcHandle(), mm::ExternalRCRefRegistry::instance());
-
-        stopTheWorld(gcHandle(), "GC stop the world: prepare to sweep");
     }
 
     // By this point mutator mark queues cannot be populated anymore.
