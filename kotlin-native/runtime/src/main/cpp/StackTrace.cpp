@@ -261,44 +261,51 @@ std::vector<std::string> kotlin::GetStackTraceStrings(std_support::span<void* co
     size_t size = stackTrace.size();
     std::vector<std::string> strings;
     strings.reserve(size);
+    bool errorOccurred = false;
     if (size > 0) {
         SourceInfo buffer[10]; // outside of the loop to avoid calling constructors and destructors each time
         for (size_t index = 0; index < size; ++index) {
             KNativePtr address = stackTrace[index];
             if (!address || reinterpret_cast<uintptr_t>(address) == 1) continue;
-            address = adjustAddressForSourceInfo(address);
-            int frames_or_overflow = getSourceInfo(address, buffer, std::size(buffer));
-            int frames = std::min<int>(frames_or_overflow, std::size(buffer));
+
             bool isSomethingPrinted = false;
             bool isSomethingHidden = false;
             char line[1024];
-            for (int frame = 0; frame < frames; frame++) {
-                auto &sourceInfo = buffer[frame];
-                if (sourceInfo.nodebug) {
-                    isSomethingHidden = true;
-                } else if (!sourceInfo.getFileName().empty()) {
-                    bool is_last = frame == frames - 1;
-                    if (is_last && frames_or_overflow != frames) {
-                        snprintf_with_addr(line, sizeof(line) - 1, strings.size(), address, false, "[some inlined frames skipped]");
-                        strings.push_back(line);
-                    }
-                    if (sourceInfo.lineNumber != -1) {
-                        if (sourceInfo.column != -1) {
-                            snprintf_with_addr(
-                                    line, sizeof(line) - 1, strings.size(), address, !is_last, "(%s:%d:%d)",
-                                    sourceInfo.getFileName().c_str(), sourceInfo.lineNumber, sourceInfo.column);
+
+            address = adjustAddressForSourceInfo(address);
+            int framesCount = getSourceInfo(address, buffer, std::size(buffer));
+            if (framesCount == -1) {
+                errorOccurred = true;
+            } else {
+                int framesToPrint = std::min<int>(framesCount, std::size(buffer));
+                for (int frame = 0; frame < framesToPrint; frame++) {
+                    auto &sourceInfo = buffer[frame];
+                    if (sourceInfo.nodebug) {
+                        isSomethingHidden = true;
+                    } else if (!sourceInfo.getFileName().empty()) {
+                        bool is_last = frame == framesToPrint - 1;
+                        if (is_last && framesCount != framesToPrint) {
+                            snprintf_with_addr(line, sizeof(line) - 1, strings.size(), address, false, "[some inlined frames skipped]");
+                            strings.push_back(line);
+                        }
+                        if (sourceInfo.lineNumber != -1) {
+                            if (sourceInfo.column != -1) {
+                                snprintf_with_addr(
+                                        line, sizeof(line) - 1, strings.size(), address, !is_last, "(%s:%d:%d)",
+                                        sourceInfo.getFileName().c_str(), sourceInfo.lineNumber, sourceInfo.column);
+                            } else {
+                                snprintf_with_addr(
+                                        line, sizeof(line) - 1, strings.size(), address, !is_last, "(%s:%d)",
+                                        sourceInfo.getFileName().c_str(), sourceInfo.lineNumber);
+                            }
                         } else {
                             snprintf_with_addr(
-                                    line, sizeof(line) - 1, strings.size(), address, !is_last, "(%s:%d)",
-                                    sourceInfo.getFileName().c_str(), sourceInfo.lineNumber);
+                                    line, sizeof(line) - 1, strings.size(), address, !is_last, "(%s:<unknown>)",
+                                    sourceInfo.getFileName().c_str());
                         }
-                    } else {
-                        snprintf_with_addr(
-                                line, sizeof(line) - 1, strings.size(), address, !is_last, "(%s:<unknown>)",
-                                sourceInfo.getFileName().c_str());
+                        isSomethingPrinted = true;
+                        strings.push_back(line);
                     }
-                    isSomethingPrinted = true;
-                    strings.push_back(line);
                 }
             }
             if (!isSomethingPrinted && !isSomethingHidden) {
@@ -306,6 +313,9 @@ std::vector<std::string> kotlin::GetStackTraceStrings(std_support::span<void* co
                 strings.push_back(line);
             }
         }
+    }
+    if (errorOccurred) {
+        konan::consoleErrorf("NOTE: unable to find file names and line numbers, see https://youtrack.jetbrains.com/issue/KT-85559\n");
     }
     return strings;
 }
