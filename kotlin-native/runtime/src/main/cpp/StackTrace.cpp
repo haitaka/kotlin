@@ -277,7 +277,7 @@ std::vector<std::string> kotlin::GetStackTraceStrings(std_support::span<void* co
     // outside the loop to avoid calling constructors and destructors each time
     SourceInfo framesInfoBuffer[10];
 
-    bool errorOccurred = false;
+    bool errorReported = false;
 
     for (void* address : stackTrace) {
         if (!address || reinterpret_cast<uintptr_t>(address) == 1) continue;
@@ -289,9 +289,7 @@ std::vector<std::string> kotlin::GetStackTraceStrings(std_support::span<void* co
 
         address = adjustAddressForSourceInfo(address);
         int framesCount = getSourceInfo(address, framesInfoBuffer, std::size(framesInfoBuffer));
-        if (framesCount == -1) {
-            errorOccurred = true;
-        } else {
+        if (framesCount >= 0) {
             int framesToPrint = std::min<int>(framesCount, std::size(framesInfoBuffer));
             for (int i = 0; i < framesToPrint; ++i) {
                 const SourceInfo& sourceInfo = framesInfoBuffer[i];
@@ -316,13 +314,16 @@ std::vector<std::string> kotlin::GetStackTraceStrings(std_support::span<void* co
         }
 
         if (!isSomethingPrinted && !isSomethingHidden) {
-            snprintf_with_addr(lineBuffer, strings.size(), address, false, "%s", "");
+            bool errorOccurred = framesCount == -1;
+            auto message = "";
+            if (errorOccurred && !errorReported) {
+                message = "<NOTE: unable to find file names and line numbers, "
+                          "see https://youtrack.jetbrains.com/issue/KT-85559>";
+                errorReported = true;
+            }
+            snprintf_with_addr(lineBuffer, strings.size(), address, false, "%s", message);
             strings.emplace_back(line);
         }
-    }
-
-    if (errorOccurred) {
-        konan::consoleErrorf("NOTE: unable to find file names and line numbers, see https://youtrack.jetbrains.com/issue/KT-85559\n");
     }
 
     return strings;
