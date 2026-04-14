@@ -198,7 +198,7 @@ NO_INLINE size_t kotlin::internal::GetCurrentStackTrace(size_t skipFrames, std_s
 namespace {
 
 __attribute__((format(printf, 5, 6)))
-std_support::span<char> snprintf_with_addr(std_support::span<char> buffer, size_t frame, const void* addr, bool is_inline, const char *format, ...) {
+void snprintf_with_addr(std_support::span<char> buffer, size_t frame, const void* addr, bool is_inline, const char *format, ...) {
     const char* image = "???";
     char symbol[512];
     strcpy(symbol, "0x0");
@@ -226,9 +226,8 @@ std_support::span<char> snprintf_with_addr(std_support::span<char> buffer, size_
     }
     std::va_list args;
     va_start(args, format);
-    buffer = VFormatToSpan(buffer, format, args);
+    VFormatToSpan(buffer, format, args);
     va_end(args);
-    return buffer;
 }
 
 
