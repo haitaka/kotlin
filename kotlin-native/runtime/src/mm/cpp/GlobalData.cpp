@@ -44,10 +44,10 @@ ManuallyScoped<mm::GlobalData> globalDataInstance{};
 // may crash trying to lock it too.
 SpinLock globalDataInitMutex;
 // `no_destroy` is required because winpthreads' `pthread_cond_destroy` deadlocks during `DLL_PROCESS_DETACH`
-// when worker threads are terminated by the Windows loader while still holding winpthreads-internal spinlocks. See KT-85897.
+// when worker threads are terminated by the Windows loader while still holding winpthreads internal locks. See KT-85897.
 [[clang::no_destroy]] std::condition_variable_any globalDataInitCV;
 #else
-std::mutex globalDataInitMutex;
+[[clang::no_destroy]] std::mutex globalDataInitMutex;
 [[clang::no_destroy]] std::condition_variable globalDataInitCV;
 #endif
 
