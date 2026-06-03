@@ -17,6 +17,8 @@ interface Node {
 
     val registered: Boolean
 
+    val sourcePosition: SourcePosition?
+
     fun ensureUnique(): Node = form.ensureUnique(this)
 
     fun addUse(use: Node)
@@ -46,6 +48,8 @@ sealed class NodeBase(final override val form: Form, args: List<Node?>) : Node {
 
     final override val registered: Boolean
         get() = id > 0
+
+    final override var sourcePosition: SourcePosition? = null
 
     override fun addUse(use: Node) {
         require(use !is Unreachable)

@@ -24,6 +24,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.CodeGeneratorVisitor.FunctionScop
 import org.jetbrains.kotlin.backend.konan.llvm.ExceptionHandler
 import org.jetbrains.kotlin.backend.konan.llvm.FunctionGenerationContext
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
+import org.jetbrains.kotlin.backend.konan.llvm.LocationInfo
 import org.jetbrains.kotlin.backend.konan.llvm.computeFullName
 import org.jetbrains.kotlin.backend.konan.llvm.theUnitInstanceRef
 import org.jetbrains.kotlin.backend.konan.llvm.toLLVMType
@@ -102,6 +103,10 @@ internal class HairToBitcode(
             else -> value
         }
 
+        fun SourcePosition.asLocationInfo(): LocationInfo {
+
+        }
+
         val session = hairComp.session
         with (session) {
             withGCM {
@@ -123,6 +128,7 @@ internal class HairToBitcode(
                         fun genNode(node: Node) {
                             println("    Generating $node")
                             // context.log { "  generating $node" }
+                            debugLocation(node.sourcePosition)
                             val value = when (node) {
                                 is BlockEntry -> {
                                     // llvm requires phis to be generated first, but GCM can insert floating stuff inbetween

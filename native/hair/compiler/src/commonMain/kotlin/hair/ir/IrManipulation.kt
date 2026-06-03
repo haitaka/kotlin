@@ -88,6 +88,22 @@ fun <T> Session.buildInitialIR(
     }
 }
 
+context(outerBuilder: NodeBuilder)
+fun <T> withPos(position: SourcePosition?, builderAction: context(NodeBuilder) () -> T): T {
+    // FIXME don't create a new builder every time. Add a mutable field to the main builder instead
+    val builder = object : NodeBuilder {
+        override val session: Session = outerBuilder.session
+        override fun onNodeBuilt(node: Node): Node {
+            return outerBuilder.onNodeBuilt(node).also {
+                (node as NodeBase).sourcePosition = position
+            }
+        }
+    }
+    return context(builder) {
+        builderAction()
+    }
+}
+
 fun <T> Session.modifyIR(
     builderAction: context(NodeBuilder, NoControlFlowBuilder) ArgumentUpdater.() -> T
 ): T {

@@ -39,10 +39,12 @@ import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.types.isChar
 import org.jetbrains.kotlin.ir.types.isDoubleOrFloatWithoutNullability
 import org.jetbrains.kotlin.ir.types.isUnit
+import org.jetbrains.kotlin.ir.util.getSourceFile
 import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.isOverridable
 import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.ir.util.render
+import org.jetbrains.kotlin.ir.util.sourceFileWhenInlined
 
 
 internal fun IrSimpleFunction.shouldGenerateBody(): Boolean = modality != Modality.ABSTRACT && !isExternal
@@ -122,6 +124,8 @@ internal class HairGenerator(val context: Context, val module: IrModuleFragment)
                     AssignVar(v)(node)
                 }
                 f.body?.accept(object : IrVisitor<Node, Unit>() {
+                    var inlinedAt: SourcePosition? = null
+
                     override fun visitElement(element: IrElement, data: Unit): Node {
                         error("Should not reach here $element")
                     }
@@ -183,19 +187,23 @@ internal class HairGenerator(val context: Context, val module: IrModuleFragment)
                         val function = expression.symbol.owner
                         require(!function.isSuspend) { "Suspend functions should be lowered out at this point"}
 
-                        return when {
-                            function.isTypedIntrinsic -> generateIntrinsic(expression, resultType, args)
-                            function.isBuiltInOperator -> generateBuiltinOperator(expression, resultType, args)
-                            function.origin == StaticInitializersOrigins.STATIC_GLOBAL_INITIALIZER -> GlobalInit()
-                            function.origin == StaticInitializersOrigins.STATIC_THREAD_LOCAL_INITIALIZER -> ThreadLocalInit()
-                            function.origin == StaticInitializersOrigins.STATIC_STANDALONE_THREAD_LOCAL_INITIALIZER -> StandaloneThreadLocalInit()
-                            !function.isReal -> notImplemented(HairTODO.FAKE_OVERRIDE_CALL)
-                            else -> if (expression.isVirtual()) {
-                                notImplemented(HairTODO.VIRTUAL_CALLS)
-                            } else {
-                                val call = InvokeStatic(HairFunctionImpl(function))(callArgs = args.toTypedArray())
-                                // TODO insert Halt if function returns Notihing ?
-                                if (function.returnType.isUnit()) UnitValue() else call
+                        // TODO use position for other expressions
+                        val [line, column] = f.getSourceFile()!!.lineAndColumn(expression.startOffset)
+                        return withPos(SourcePosition(line, column, inlinedAt)) {
+                            when {
+                                function.isTypedIntrinsic -> generateIntrinsic(expression, resultType, args)
+                                function.isBuiltInOperator -> generateBuiltinOperator(expression, resultType, args)
+                                function.origin == StaticInitializersOrigins.STATIC_GLOBAL_INITIALIZER -> GlobalInit()
+                                function.origin == StaticInitializersOrigins.STATIC_THREAD_LOCAL_INITIALIZER -> ThreadLocalInit()
+                                function.origin == StaticInitializersOrigins.STATIC_STANDALONE_THREAD_LOCAL_INITIALIZER -> StandaloneThreadLocalInit()
+                                !function.isReal -> notImplemented(HairTODO.FAKE_OVERRIDE_CALL)
+                                else -> if (expression.isVirtual()) {
+                                    notImplemented(HairTODO.VIRTUAL_CALLS)
+                                } else {
+                                    val call = InvokeStatic(HairFunctionImpl(function))(callArgs = args.toTypedArray())
+                                    // TODO insert Halt if function returns Notihing ?
+                                    if (function.returnType.isUnit()) UnitValue() else call
+                                }
                             }
                         }
                     }
@@ -474,6 +482,14 @@ internal class HairGenerator(val context: Context, val module: IrModuleFragment)
 
                     override fun visitThrow(expression: IrThrow, data: Unit): Node {
                         notImplemented(HairTODO.EXCEPTIONS)
+                    }
+
+                    override fun visitInlinedFunctionBlock(inlinedBlock: IrInlinedFunctionBlock, data: Unit): Node {
+                        val [line, column] = f.getSourceFile()!!.lineAndColumn(inlinedBlock.startOffset)
+                        inlinedAt = SourcePosition(line, column, inlinedAt)
+                        return super.visitInlinedFunctionBlock(inlinedBlock, data).also {
+                            inlinedAt = inlinedAt?.inlinedAt
+                        }
                     }
                 }, Unit)
             }
