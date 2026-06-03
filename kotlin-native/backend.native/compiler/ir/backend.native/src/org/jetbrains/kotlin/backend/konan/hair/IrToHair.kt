@@ -24,30 +24,17 @@ import hair.sym.HairType
 import hair.utils.*
 import hair.transform.*
 import org.jetbrains.kotlin.backend.common.ir.isUnconditional
-import org.jetbrains.kotlin.backend.konan.ir.isBuiltInOperator
-import org.jetbrains.kotlin.backend.konan.ir.isComparisonFunction
-import org.jetbrains.kotlin.backend.konan.ir.isTypedIntrinsic
 import org.jetbrains.kotlin.backend.konan.ir.tryGetIntrinsicType
 import org.jetbrains.kotlin.ir.visitors.*
 import org.jetbrains.kotlin.backend.konan.llvm.*
-import org.jetbrains.kotlin.backend.konan.lower.StaticInitializersOrigins
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
 import org.jetbrains.kotlin.config.messageCollector
 import org.jetbrains.kotlin.ir.symbols.IrReturnableBlockSymbol
 import org.jetbrains.kotlin.ir.symbols.IrValueSymbol
 import org.jetbrains.kotlin.ir.types.getClass
-import org.jetbrains.kotlin.ir.types.isChar
-import org.jetbrains.kotlin.ir.types.isDoubleOrFloatWithoutNullability
 import org.jetbrains.kotlin.ir.types.isUnit
-import org.jetbrains.kotlin.ir.util.hasAnnotation
-import org.jetbrains.kotlin.ir.util.isOverridable
-import org.jetbrains.kotlin.ir.util.isReal
 import org.jetbrains.kotlin.ir.util.render
 
-
-internal fun IrSimpleFunction.shouldGenerateBody(): Boolean = modality != Modality.ABSTRACT && !isExternal
-
-private fun IrCall.isVirtual(): Boolean = superQualifierSymbol?.owner == null && symbol.owner.isOverridable
 
 internal val GenerateHairPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment, Map<IrFunction, FunctionCompilation>>(
         name = "GenerateHair",
@@ -183,14 +170,14 @@ internal class HairGenerator(val context: Context, val module: IrModuleFragment)
                         val function = expression.symbol.owner
                         require(!function.isSuspend) { "Suspend functions should be lowered out at this point"}
 
-                        return when {
-                            function.isTypedIntrinsic -> generateIntrinsic(expression, resultType, args)
-                            function.isBuiltInOperator -> generateBuiltinOperator(expression, resultType, args)
-                            function.origin == StaticInitializersOrigins.STATIC_GLOBAL_INITIALIZER -> GlobalInit()
-                            function.origin == StaticInitializersOrigins.STATIC_THREAD_LOCAL_INITIALIZER -> ThreadLocalInit()
-                            function.origin == StaticInitializersOrigins.STATIC_STANDALONE_THREAD_LOCAL_INITIALIZER -> StandaloneThreadLocalInit()
-                            !function.isReal -> notImplemented(HairTODO.FAKE_OVERRIDE_CALL)
-                            else -> if (expression.isVirtual()) {
+                        return when (val callKind = classifyCall(expression)) {
+                            CallKind.Intrinsic -> generateIntrinsic(expression, resultType, args)
+                            CallKind.BuiltinOperator -> generateBuiltinOperator(expression, resultType, args)
+                            CallKind.StaticGlobalInitializer -> GlobalInit()
+                            CallKind.StaticThreadLocalInitializer -> ThreadLocalInit()
+                            CallKind.StaticStandaloneThreadLocalInitializer -> StandaloneThreadLocalInit()
+                            CallKind.FakeOverride -> notImplemented(HairTODO.FAKE_OVERRIDE_CALL)
+                            is CallKind.Direct -> if (callKind.isVirtual) {
                                 notImplemented(HairTODO.VIRTUAL_CALLS)
                             } else {
                                 val call = InvokeStatic(HairFunctionImpl(function))(callArgs = args.toTypedArray())
@@ -237,54 +224,24 @@ internal class HairGenerator(val context: Context, val module: IrModuleFragment)
                     }
 
                     private fun generateBuiltinOperator(call: IrCall, resType: HairType, args: List<Node?>): Node {
-                        val ib = context.irBuiltIns
-                        val functionSymbol = call.symbol
-                        val function = functionSymbol.owner
-                        val argType = function.parameters[0].type.asHairType()
-                        return when (functionSymbol) {
-                            ib.eqeqeqSymbol -> {
-                                Cmp(argType, CmpOp.EQ)(args[0]!!, args[1]!!)
-                            }
-                            ib.booleanNotSymbol -> Cmp(argType, CmpOp.NE)(args[0]!!, True())
-                            else -> {
-                                val isFloatingPoint = call.arguments[0]!!.type.isDoubleOrFloatWithoutNullability() // FIXME is this correct?
-                                val shouldUseUnsignedComparison = functionSymbol.owner.parameters[0].type.isChar()
-                                val op = when {
-                                    functionSymbol.isComparisonFunction(ib.greaterFunByOperandType) -> {
-                                        when {
-                                            isFloatingPoint -> CmpOp.S_GT
-                                            shouldUseUnsignedComparison -> CmpOp.U_GT
-                                            else -> CmpOp.S_GT
-                                        }
-                                    }
-                                    functionSymbol.isComparisonFunction(ib.greaterOrEqualFunByOperandType) -> {
-                                        when {
-                                            isFloatingPoint -> CmpOp.S_GE
-                                            shouldUseUnsignedComparison -> CmpOp.U_GE
-                                            else -> CmpOp.S_GE
-                                        }
-                                    }
-                                    functionSymbol.isComparisonFunction(ib.lessFunByOperandType) -> {
-                                        when {
-                                            isFloatingPoint -> CmpOp.S_LT
-                                            shouldUseUnsignedComparison -> CmpOp.U_LT
-                                            else -> CmpOp.S_LT
-                                        }
-                                    }
-                                    functionSymbol.isComparisonFunction(ib.lessOrEqualFunByOperandType) -> {
-                                        when {
-                                            isFloatingPoint -> CmpOp.S_LE
-                                            shouldUseUnsignedComparison -> CmpOp.U_LE
-                                            else -> CmpOp.S_LE
-                                        }
-                                    }
-                                    functionSymbol == context.irBuiltIns.illegalArgumentExceptionSymbol -> {
-                                        TODO("context.symbols.throwIllegalArgumentExceptionWithMessage")
-                                    }
-                                    else -> TODO(functionSymbol.owner.name.toString())
+                        val argType = call.symbol.owner.parameters[0].type.asHairType()
+                        return when (val operator = classifyBuiltinOperator(call, context.irBuiltIns)) {
+                            BuiltinOperatorKind.ReferenceEquality -> Cmp(argType, CmpOp.EQ)(args[0]!!, args[1]!!)
+                            BuiltinOperatorKind.BooleanNot -> Cmp(argType, CmpOp.NE)(args[0]!!, True())
+                            is BuiltinOperatorKind.Comparison -> {
+                                // HaIR currently maps floating-point comparisons onto the signed CmpOp.
+                                val unsigned = operator.kind == ComparisonKind.UNSIGNED
+                                val op = when (operator.op) {
+                                    ComparisonOp.GT -> if (unsigned) CmpOp.U_GT else CmpOp.S_GT
+                                    ComparisonOp.GE -> if (unsigned) CmpOp.U_GE else CmpOp.S_GE
+                                    ComparisonOp.LT -> if (unsigned) CmpOp.U_LT else CmpOp.S_LT
+                                    ComparisonOp.LE -> if (unsigned) CmpOp.U_LE else CmpOp.S_LE
                                 }
                                 Cmp(argType, op)(args[0]!!, args[1]!!)
                             }
+                            BuiltinOperatorKind.IllegalArgumentExceptionThrow ->
+                                TODO("context.symbols.throwIllegalArgumentExceptionWithMessage")
+                            is BuiltinOperatorKind.Unsupported -> TODO(operator.debugName)
                         }
                     }
 
@@ -445,7 +402,7 @@ internal class HairGenerator(val context: Context, val module: IrModuleFragment)
 
                     override fun visitGetField(expression: IrGetField, data: Unit): Node {
                         val field = expression.symbol.owner
-                        if (field.hasAnnotation(KonanFqNames.volatile)) notImplemented(HairTODO.VOLATILE)
+                        if (field.isVolatileField()) notImplemented(HairTODO.VOLATILE)
                         return if (field.isStatic) {
                             // FIXME global vs field?
                             LoadGlobal(HairGlobalImpl(field))
@@ -457,7 +414,7 @@ internal class HairGenerator(val context: Context, val module: IrModuleFragment)
 
                     override fun visitSetField(expression: IrSetField, data: Unit): Node {
                         val field = expression.symbol.owner
-                        if (field.hasAnnotation(KonanFqNames.volatile)) notImplemented(HairTODO.VOLATILE)
+                        if (field.isVolatileField()) notImplemented(HairTODO.VOLATILE)
                         val value = expression.value.accept(this, Unit)
                         return if (field.isStatic) {
                             // FIXME global vs field?

@@ -24,12 +24,12 @@ import org.jetbrains.kotlin.builtins.UnsignedType
 import org.jetbrains.kotlin.config.nativeBinaryOptions.AndroidProgramType
 import org.jetbrains.kotlin.config.nativeBinaryOptions.BinaryOptions
 import org.jetbrains.kotlin.config.nativeBinaryOptions.SourceInfoType
-import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.ir.*
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.expressions.*
 import org.jetbrains.kotlin.ir.objcinterop.*
 import org.jetbrains.kotlin.ir.types.*
+import org.jetbrains.kotlin.ir.types.isUnit
 import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.ir.util.isNullable
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
@@ -87,8 +87,6 @@ internal val IrField.storageKind: FieldStorageKind
         }
     }
 
-
-internal fun IrSimpleFunction.shouldGenerateBody(): Boolean = modality != Modality.ABSTRACT && !isExternal
 
 internal class RTTIGeneratorVisitor(generationState: NativeGenerationState, referencedFunctions: Set<IrSimpleFunction>?) : IrVisitorVoid() {
     val generator = RTTIGenerator(generationState, referencedFunctions)
@@ -1657,7 +1655,7 @@ internal class CodeGeneratorVisitor(
         context.log { "evaluateGetField               : ${ir2string(value)}" }
         val alignment : Int
         val order = when {
-            value.symbol.owner.hasAnnotation(KonanFqNames.volatile) ->
+            value.symbol.owner.isVolatileField() ->
                 LLVMAtomicOrdering.LLVMAtomicOrderingSequentiallyConsistent
             else -> null
         }
@@ -1742,7 +1740,7 @@ internal class CodeGeneratorVisitor(
         }
         functionGenerationContext.storeAny(
                 valueToAssign, address, field.type.binaryTypeIsReference(), false,
-                isVolatile = field.hasAnnotation(KonanFqNames.volatile),
+                isVolatile = field.isVolatileField(),
                 alignment = alignment,
         )
 
@@ -2358,13 +2356,15 @@ internal class CodeGeneratorVisitor(
         val function = callee.symbol.owner
         require(!function.isSuspend) { "Suspend functions should be lowered out at this point"}
 
-        return when {
-            function.isTypedIntrinsic -> intrinsicGenerator.evaluateCall(callee, args, resultSlot)
-            function.isBuiltInOperator -> evaluateOperatorCall(callee, args)
-            function.origin == StaticInitializersOrigins.STATIC_GLOBAL_INITIALIZER -> evaluateFileGlobalInitializerCall(function)
-            function.origin == StaticInitializersOrigins.STATIC_THREAD_LOCAL_INITIALIZER -> evaluateFileThreadLocalInitializerCall(function)
-            function.origin == StaticInitializersOrigins.STATIC_STANDALONE_THREAD_LOCAL_INITIALIZER -> evaluateFileStandaloneThreadLocalInitializerCall(function)
-            else -> evaluateSimpleFunctionCall(function, args, resultLifetime, callee.superQualifierSymbol?.owner, resultSlot)
+        return when (classifyCall(callee)) {
+            CallKind.Intrinsic -> intrinsicGenerator.evaluateCall(callee, args, resultSlot)
+            CallKind.BuiltinOperator -> evaluateOperatorCall(callee, args)
+            CallKind.StaticGlobalInitializer -> evaluateFileGlobalInitializerCall(function)
+            CallKind.StaticThreadLocalInitializer -> evaluateFileThreadLocalInitializerCall(function)
+            CallKind.StaticStandaloneThreadLocalInitializer -> evaluateFileStandaloneThreadLocalInitializerCall(function)
+            // Fake overrides are resolved through `function.target` by the direct/virtual call path.
+            CallKind.FakeOverride, is CallKind.Direct ->
+                evaluateSimpleFunctionCall(function, args, resultLifetime, callee.superQualifierSymbol?.owner, resultSlot)
         }
     }
 
@@ -2483,59 +2483,40 @@ internal class CodeGeneratorVisitor(
     // TODO: Intrinsify?
     private fun evaluateOperatorCall(callee: IrCall, args: List<LLVMValueRef>): LLVMValueRef {
         context.log{"evaluateOperatorCall           : origin:${ir2string(callee)}"}
-        val function = callee.symbol.owner
-        val ib = context.irBuiltIns
 
         with(functionGenerationContext) {
-            val functionSymbol = function.symbol
-            return when (functionSymbol) {
-                ib.eqeqeqSymbol -> icmpEq(args[0], args[1])
-                ib.booleanNotSymbol -> icmpNe(args[0], kTrue)
-                else -> {
-                    val isFloatingPoint = args[0].type.isFloatingPoint()
-                    // LLVM does not distinguish between signed/unsigned integers, so we must check
-                    // the parameter type.
-                    val shouldUseUnsignedComparison = function.parameters[0].type.isChar()
-                    when {
-                        functionSymbol.isComparisonFunction(ib.greaterFunByOperandType) -> {
-                            when {
-                                isFloatingPoint -> fcmpGt(args[0], args[1])
-                                shouldUseUnsignedComparison -> icmpUGt(args[0], args[1])
-                                else -> icmpGt(args[0], args[1])
-                            }
-                        }
-                        functionSymbol.isComparisonFunction(ib.greaterOrEqualFunByOperandType) -> {
-                            when {
-                                isFloatingPoint -> fcmpGe(args[0], args[1])
-                                shouldUseUnsignedComparison -> icmpUGe(args[0], args[1])
-                                else -> icmpGe(args[0], args[1])
-                            }
-                        }
-                        functionSymbol.isComparisonFunction(ib.lessFunByOperandType) -> {
-                            when {
-                                isFloatingPoint -> fcmpLt(args[0], args[1])
-                                shouldUseUnsignedComparison -> icmpULt(args[0], args[1])
-                                else -> icmpLt(args[0], args[1])
-                            }
-                        }
-                        functionSymbol.isComparisonFunction(ib.lessOrEqualFunByOperandType) -> {
-                            when {
-                                isFloatingPoint -> fcmpLe(args[0], args[1])
-                                shouldUseUnsignedComparison -> icmpULe(args[0], args[1])
-                                else -> icmpLe(args[0], args[1])
-                            }
-                        }
-                        functionSymbol == context.irBuiltIns.illegalArgumentExceptionSymbol -> {
-                            callDirect(
-                                    context.symbols.throwIllegalArgumentExceptionWithMessage.owner,
-                                    args,
-                                    Lifetime.GLOBAL,
-                                    null
-                            )
-                        }
-                        else -> TODO(function.name.toString())
+            return when (val operator = classifyBuiltinOperator(callee, context.irBuiltIns)) {
+                BuiltinOperatorKind.ReferenceEquality -> icmpEq(args[0], args[1])
+                BuiltinOperatorKind.BooleanNot -> icmpNe(args[0], kTrue)
+                is BuiltinOperatorKind.Comparison -> when (operator.op) {
+                    ComparisonOp.GT -> when (operator.kind) {
+                        ComparisonKind.FLOATING -> fcmpGt(args[0], args[1])
+                        ComparisonKind.UNSIGNED -> icmpUGt(args[0], args[1])
+                        ComparisonKind.SIGNED -> icmpGt(args[0], args[1])
+                    }
+                    ComparisonOp.GE -> when (operator.kind) {
+                        ComparisonKind.FLOATING -> fcmpGe(args[0], args[1])
+                        ComparisonKind.UNSIGNED -> icmpUGe(args[0], args[1])
+                        ComparisonKind.SIGNED -> icmpGe(args[0], args[1])
+                    }
+                    ComparisonOp.LT -> when (operator.kind) {
+                        ComparisonKind.FLOATING -> fcmpLt(args[0], args[1])
+                        ComparisonKind.UNSIGNED -> icmpULt(args[0], args[1])
+                        ComparisonKind.SIGNED -> icmpLt(args[0], args[1])
+                    }
+                    ComparisonOp.LE -> when (operator.kind) {
+                        ComparisonKind.FLOATING -> fcmpLe(args[0], args[1])
+                        ComparisonKind.UNSIGNED -> icmpULe(args[0], args[1])
+                        ComparisonKind.SIGNED -> icmpLe(args[0], args[1])
                     }
                 }
+                BuiltinOperatorKind.IllegalArgumentExceptionThrow -> callDirect(
+                        context.symbols.throwIllegalArgumentExceptionWithMessage.owner,
+                        args,
+                        Lifetime.GLOBAL,
+                        null
+                )
+                is BuiltinOperatorKind.Unsupported -> TODO(operator.debugName)
             }
         }
     }
