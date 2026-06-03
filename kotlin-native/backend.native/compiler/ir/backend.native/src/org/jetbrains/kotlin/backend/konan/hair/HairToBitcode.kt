@@ -18,9 +18,7 @@ import hair.utils.printGraphviz
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState;
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
-import org.jetbrains.kotlin.backend.konan.llvm.CodeContext
 import org.jetbrains.kotlin.backend.konan.llvm.CodeGenerator
-import org.jetbrains.kotlin.backend.konan.llvm.CodeGeneratorVisitor.FunctionScope
 import org.jetbrains.kotlin.backend.konan.llvm.ExceptionHandler
 import org.jetbrains.kotlin.backend.konan.llvm.FunctionGenerationContext
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
@@ -65,12 +63,11 @@ internal class HairToBitcode(
 
 
     fun generateFunctionBody(
-            currentCodeContext: CodeContext,
+            functionGenerationContext: FunctionGenerationContext,
             declaration: IrFunction,
             hairComp: FunctionCompilation
     ) {
         context.log { "# Generating llvm from HaIR for ${declaration.computeFullName()}" }
-        val functionGenerationContext = (currentCodeContext.functionScope() as FunctionScope).functionGenerationContext
         val entryBlock = functionGenerationContext.currentBlock
 
         // FIXME copy&pasted from IrToBitcode
@@ -179,7 +176,7 @@ internal class HairToBitcode(
                                 }
                                 is Return -> {
                                     val result = adaptFromHair(nodeValues[node.result]!!, returnType!!)
-                                    currentCodeContext.genReturn(declaration, result)
+                                    functionGenerationContext.ret(result)
                                     null
                                 }
                                 is Goto -> {

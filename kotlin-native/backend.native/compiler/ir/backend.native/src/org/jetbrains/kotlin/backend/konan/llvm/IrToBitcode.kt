@@ -43,6 +43,10 @@ import org.jetbrains.kotlin.library.uniqueName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.utils.addToStdlib.ifTrue
 
+internal fun IrSimpleFunction.returnsUnit() = returnType.isUnit().also {
+    require(!isSuspend) { "Suspend functions should be lowered out at this point" }
+}
+
 internal class NativeCodeGeneratorException(val declarations: List<IrElement>, cause: Throwable?): IllegalStateException(cause) {
     override val message: String
         get() = try {
@@ -113,101 +117,51 @@ internal class RTTIGeneratorVisitor(generationState: NativeGenerationState, refe
 }
 
 //-------------------------------------------------------------------------//
+// CodeContext interface and implementations are in FunctionBodyScope.kt.
+// Minimal shim so the compiler finds the type during migration.
 
-
-/**
- * Defines how to generate context-dependent operations.
- */
 internal interface CodeContext {
-
-    /**
-     * Generates `return` [value] operation.
-     *
-     * @param value may be null iff target type is `Unit`.
-     */
     fun genReturn(target: IrSymbolOwner, value: LLVMValueRef?)
-
-    fun getReturnSlot(target: IrSymbolOwner) : LLVMValueRef?
-
+    fun getReturnSlot(target: IrSymbolOwner): LLVMValueRef?
     fun genBreak(destination: IrBreak)
-
     fun genContinue(destination: IrContinue)
-
     val exceptionHandler: ExceptionHandler
-
-    /**
-     * Declares the variable.
-     * @return index of declared variable.
-     */
     fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?): Int
-
-    /**
-     * @return index of value declared before, or -1 if no such variable has been declared yet.
-     */
     fun getDeclaredValue(value: IrValueDeclaration): Int
-
-    /**
-     * Generates the code to obtain a value available in this context.
-     *
-     * @return the requested value
-     */
     fun genGetValue(value: IrValueDeclaration, resultSlot: LLVMValueRef?): LLVMValueRef
-
-    /**
-     * Returns owning function scope.
-     *
-     * @return the requested value
-     */
     fun functionScope(): CodeContext?
-
-    /**
-     * Returns owning file scope.
-     *
-     * @return the requested value if in the file scope or null.
-     */
     fun fileScope(): CodeContext?
-
-    /**
-     * Returns owning class scope [ClassScope].
-     *
-     * @returns the requested value if in the class scope or null.
-     */
     fun classScope(): CodeContext?
-
     fun addResumePoint(bbLabel: LLVMBasicBlockRef): Int
-
-    /**
-     * Returns owning returnable block scope [ReturnableBlockScope].
-     *
-     * @returns the requested value if in the returnableBlockScope scope or null.
-     */
     fun returnableBlockScope(): CodeContext?
-
-    /**
-     * Returns location information for given source location [LocationInfo].
-     */
     fun location(offset: Int): LocationInfo?
-
-    /**
-     * Returns [DIScopeOpaqueRef] instance for corresponding scope.
-     */
     fun scope(): DIScopeOpaqueRef?
-
-    /**
-     * Called, when context is pushed on stack
-     */
     fun onEnter() {}
-
-    /**
-     * Called, when context is removed from stack
-     */
     fun onExit() {}
-
-    /**
-     * Called, when exception is caught in this block. Result expception would be rethrown instead.
-     */
-    fun wrapException(e: Exception) : Exception
+    fun wrapException(e: Exception): Exception
 }
+
+internal object TopLevelCodeContext : CodeContext {
+    private fun unsupported(any: Any? = null): Nothing = throw UnsupportedOperationException(any?.toString() ?: "")
+    override fun genReturn(target: IrSymbolOwner, value: LLVMValueRef?) = unsupported(target)
+    override fun getReturnSlot(target: IrSymbolOwner): LLVMValueRef? = unsupported(target)
+    override fun genBreak(destination: IrBreak) = unsupported()
+    override fun genContinue(destination: IrContinue) = unsupported()
+    override val exceptionHandler get() = unsupported()
+    override fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?) = unsupported(variable)
+    override fun getDeclaredValue(value: IrValueDeclaration) = -1
+    override fun genGetValue(value: IrValueDeclaration, resultSlot: LLVMValueRef?) = unsupported(value)
+    override fun functionScope(): CodeContext? = null
+    override fun fileScope(): CodeContext? = null
+    override fun classScope(): CodeContext? = null
+    override fun addResumePoint(bbLabel: LLVMBasicBlockRef) = unsupported(bbLabel)
+    override fun returnableBlockScope(): CodeContext? = null
+    override fun location(offset: Int): LocationInfo? = unsupported()
+    override fun scope(): DIScopeOpaqueRef? = unsupported()
+    override fun wrapException(e: Exception) = e
+}
+
+internal abstract class InnerScope(val outerContext: CodeContext) : CodeContext by outerContext
 
 //-------------------------------------------------------------------------//
 
@@ -226,8 +180,30 @@ internal class CodeGeneratorVisitor(
 
     val hairToBit = HairToBitcode(generationState, codegen)
 
-    // TODO: consider eliminating mutable state
-    private var currentCodeContext: CodeContext = TopLevelCodeContext
+    /** Owns all scope state; scope classes live here as inner classes. */
+    val bodyScope = FunctionBodyScope(
+            generationState, codegen,
+            evaluateExpressionAndJump = { expr, continuation -> evaluateExpressionAndJump(expr, continuation) },
+            genInstanceOf = { obj, cls -> genInstanceOfImpl(obj, cls) },
+    )
+
+    // Convenience delegates so the rest of the visitor can use unchanged call sites.
+    private val currentCodeContext: CodeContext get() = bodyScope.current
+    private val functionGenerationContext: FunctionGenerationContext get() = bodyScope.functionGenerationContext
+    private inline fun <R> using(scope: CodeContext?, block: () -> R): R = bodyScope.using(scope, block)
+    private fun fileEntry(): IrFileEntry = bodyScope.fileEntry()
+    private fun continuationBlock(type: IrType, locationInfo: LocationInfo?, code: (ContinuationBlock) -> Unit = {}) =
+            bodyScope.continuationBlock(type, locationInfo, code)
+    private fun bindParameters(function: IrSimpleFunction?) = bodyScope.bindParameters(function)
+    private fun debugInfoIfNeeded(function: IrSimpleFunction?, element: IrElement) =
+            bodyScope.debugInfoIfNeeded(function, element)
+    private fun shouldGenerateDebugInfo(variable: IrVariable) = bodyScope.shouldGenerateDebugInfo(variable)
+    private val ContinuationBlock.value: LLVMValueRef
+        get() = valuePhi ?: codegen.theUnitInstanceRef.llvm
+    private fun FunctionGenerationContext.jump(target: ContinuationBlock, value: LLVMValueRef?) {
+        br(target.block)
+        if (target.valuePhi != null) assignPhis(target.valuePhi to value!!)
+    }
 
     private val intrinsicGeneratorEnvironment = object : IntrinsicGeneratorEnvironment {
         override val codegen: CodeGenerator
@@ -256,75 +232,6 @@ internal class CodeGeneratorVisitor(
     }
 
     private val intrinsicGenerator = IntrinsicGenerator(intrinsicGeneratorEnvironment)
-
-    /**
-     * Fake [CodeContext] that doesn't support any operation.
-     *
-     * During function code generation [FunctionScope] should be set up.
-     */
-    private object TopLevelCodeContext : CodeContext {
-        private fun unsupported(any: Any? = null): Nothing = throw UnsupportedOperationException(if (any is IrElement) any.render() else any?.toString() ?: "")
-
-        override fun genReturn(target: IrSymbolOwner, value: LLVMValueRef?) = unsupported(target)
-
-        override fun getReturnSlot(target: IrSymbolOwner): LLVMValueRef? = unsupported(target)
-
-        override fun genBreak(destination: IrBreak) = unsupported()
-
-        override fun genContinue(destination: IrContinue) = unsupported()
-
-        override val exceptionHandler get() = unsupported()
-
-        override fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?) = unsupported(variable)
-
-        override fun getDeclaredValue(value: IrValueDeclaration) = -1
-
-        override fun genGetValue(value: IrValueDeclaration, resultSlot: LLVMValueRef?) = unsupported(value)
-
-        override fun functionScope(): CodeContext? = null
-
-        override fun fileScope(): CodeContext? = null
-
-        override fun classScope(): CodeContext? = null
-
-        override fun addResumePoint(bbLabel: LLVMBasicBlockRef) = unsupported(bbLabel)
-
-        override fun returnableBlockScope(): CodeContext? = null
-
-        override fun location(offset: Int): LocationInfo? = unsupported()
-
-        override fun scope(): DIScopeOpaqueRef? = unsupported()
-
-        override fun wrapException(e: Exception) = e
-    }
-
-    /**
-     * The [CodeContext] which can define some operations and delegate other ones to [outerContext]
-     */
-    internal abstract class InnerScope(val outerContext: CodeContext) : CodeContext by outerContext
-
-    /**
-     * Convenient [InnerScope] implementation that is bound to the [currentCodeContext].
-     */
-    internal abstract inner class InnerScopeImpl : InnerScope(currentCodeContext)
-    /**
-     * Executes [block] with [codeContext] substituted as [currentCodeContext].
-     */
-    private inline fun <R> using(codeContext: CodeContext?, block: () -> R): R {
-        val oldCodeContext = currentCodeContext
-        if (codeContext != null) {
-            currentCodeContext = codeContext
-            codeContext.onEnter()
-        }
-        try {
-            return block()
-        } catch (e: Exception) {
-            throw (codeContext?.wrapException(e) ?: e)
-        } finally {
-            codeContext?.onExit()
-            currentCodeContext = oldCodeContext
-        }
-    }
 
     private fun appendCAdapters(elements: CAdapterExportedElements) {
         CAdapterCodegen(codegen, generationState).buildAllAdaptersRecursively(elements)
@@ -388,7 +295,7 @@ internal class CodeGeneratorVisitor(
 
     private fun createInitBody(state: ScopeInitializersGenerationState): RuntimeInitializer {
         return generateRuntimeInitializer {
-            using(FunctionScope(function, this)) {
+            using(bodyScope.FunctionScope(function, this)) {
                 val bbInit = basicBlock("init", null)
                 val bbLocalInit = basicBlock("local_init", null)
                 val bbLocalAlloc = basicBlock("local_alloc", null)
@@ -480,7 +387,7 @@ internal class CodeGeneratorVisitor(
 
     override fun visitFile(declaration: IrFile) {
         @Suppress("UNCHECKED_CAST")
-        using(FileScope(declaration, declaration.fileEntry)) {
+        using(bodyScope.FileScope(declaration, declaration.fileEntry)) {
             runAndProcessInitializers(declaration.konanLibrary) {
                 declaration.acceptChildrenVoid(this)
                 codegen.processBindClassToObjCNameAnnotations(declaration)
@@ -490,35 +397,7 @@ internal class CodeGeneratorVisitor(
 
     //-------------------------------------------------------------------------//
 
-    private open inner class StackLocalsScope() : InnerScopeImpl() {
-        override fun onEnter() {
-            functionGenerationContext.stackLocalsManager.enterScope()
-        }
-        override fun onExit() {
-            functionGenerationContext.stackLocalsManager.exitScope()
-        }
-    }
-
-    private inner class LoopScope(val loop: IrLoop) : StackLocalsScope() {
-        val loopExit  = functionGenerationContext.basicBlock("loop_exit", loop.endLocation)
-        val loopCheck = functionGenerationContext.basicBlock("loop_check", loop.condition.startLocation)
-
-        override fun genBreak(destination: IrBreak) {
-            if (destination.loop == loop)
-                functionGenerationContext.br(loopExit)
-            else
-                super.genBreak(destination)
-        }
-
-        override fun genContinue(destination: IrContinue) {
-            if (destination.loop == loop) {
-                functionGenerationContext.br(loopCheck)
-            } else
-                super.genContinue(destination)
-        }
-    }
-
-    //-------------------------------------------------------------------------//
+    // LoopScope → FunctionBodyScope.LoopScope
 
     fun evaluateBreak(destination: IrBreak): LLVMValueRef {
         currentCodeContext.genBreak(destination)
@@ -540,137 +419,7 @@ internal class CodeGeneratorVisitor(
 
     //-------------------------------------------------------------------------//
 
-    /**
-     * The scope of variable visibility.
-     */
-    private inner class VariableScope : InnerScopeImpl() {
-
-        override fun genDeclareVariable(variable: IrVariable, value: LLVMValueRef?, variableLocation: VariableDebugLocation?): Int {
-            return functionGenerationContext.vars.createVariable(variable, value, variableLocation)
-        }
-
-        override fun getDeclaredValue(value: IrValueDeclaration): Int {
-            val index = functionGenerationContext.vars.indexOf(value)
-            return if (index < 0) super.getDeclaredValue(value) else index
-        }
-
-        override fun genGetValue(value: IrValueDeclaration, resultSlot: LLVMValueRef?): LLVMValueRef {
-            val index = functionGenerationContext.vars.indexOf(value)
-            if (index < 0) {
-                return super.genGetValue(value, resultSlot)
-            } else {
-                return functionGenerationContext.vars.load(index, resultSlot)
-            }
-        }
-    }
-
-    /**
-     * The scope of parameter visibility.
-     */
-    private open inner class ParameterScope(
-            function: IrSimpleFunction?,
-            private val functionGenerationContext: FunctionGenerationContext): InnerScopeImpl() {
-
-        val parameters = bindParameters(function)
-
-        init {
-            if (function != null) {
-                parameters.forEach {
-                    val parameter = it.key
-
-                    if (context.shouldContainDebugInfo()) {
-                        val local = functionGenerationContext.vars.createParameterOnStack(
-                                parameter, debugInfoIfNeeded(function, parameter))
-                        functionGenerationContext.mapParameterForDebug(local, it.value)
-                    } else {
-                        functionGenerationContext.vars.createParameter(parameter, it.value)
-                    }
-                }
-            }
-        }
-
-        override fun genGetValue(value: IrValueDeclaration, resultSlot: LLVMValueRef?): LLVMValueRef {
-            val index = functionGenerationContext.vars.indexOf(value)
-            if (index < 0) {
-                return super.genGetValue(value, resultSlot)
-            } else {
-                return functionGenerationContext.vars.load(index, resultSlot)
-            }
-        }
-    }
-
-    /**
-     * The [CodeContext] enclosing the entire function body.
-     */
-    internal inner class FunctionScope private constructor(
-            val functionGenerationContext: FunctionGenerationContext,
-            val declaration: IrSimpleFunction?,
-            val llvmFunction: LlvmCallable) : InnerScopeImpl() {
-
-        constructor(declaration: IrSimpleFunction, functionGenerationContext: FunctionGenerationContext) :
-                this(functionGenerationContext, declaration, codegen.llvmFunction(declaration))
-
-        constructor(llvmFunction: LlvmCallable, functionGenerationContext: FunctionGenerationContext) :
-                this(functionGenerationContext, null, llvmFunction)
-
-        override fun genReturn(target: IrSymbolOwner, value: LLVMValueRef?) {
-            if (declaration == null || target == declaration) {
-                if ((target as IrSimpleFunction).returnsUnit()) {
-                    functionGenerationContext.ret(null)
-                } else {
-                    functionGenerationContext.ret(value!!)
-                }
-            } else {
-                super.genReturn(target, value)
-            }
-        }
-
-        override fun getReturnSlot(target: IrSymbolOwner) : LLVMValueRef? {
-            return if (declaration == null || target == declaration) {
-                functionGenerationContext.returnSlot
-            } else {
-                super.getReturnSlot(target)
-            }
-        }
-
-        override val exceptionHandler: ExceptionHandler
-            get() = ExceptionHandler.Caller
-
-        override fun functionScope(): CodeContext = this
-
-
-        private val scope by lazy {
-            if (context.shouldContainLocationDebugInfo()) {
-                declaration?.scope()
-            } else {
-                null
-            }
-        }
-
-        private val fileEntry = fileEntry()
-        override fun location(offset: Int) = scope?.let { scope ->
-            val [line, column] = fileEntry.lineAndColumn(offset)
-            LocationInfo(scope, line, column)
-        }
-
-        override fun scope() = scope
-
-        override fun wrapException(e: Exception) = NativeCodeGeneratorException.wrap(e, declaration)
-    }
-
-    private val functionGenerationContext
-            get() = (currentCodeContext.functionScope() as FunctionScope).functionGenerationContext
-    /**
-     * Binds LLVM function parameters to IR parameter descriptors.
-     */
-    private fun bindParameters(function: IrSimpleFunction?): Map<IrValueParameter, LLVMValueRef> {
-        if (function == null) return emptyMap()
-        return function.parameters.mapIndexed { i, irParameter ->
-            val parameter = codegen.param(function, i)
-            assert(irParameter.type.toLLVMType(llvm) == parameter.type)
-            irParameter to parameter
-        }.toMap()
-    }
+    // VariableScope, ParameterScope, FunctionScope → FunctionBodyScope
 
     private val IrDeclarationContainer.initVariableSuffix get() = when (this) {
         is IrFile -> "${packageFqName}\$${fileEntry.name}"
@@ -755,17 +504,17 @@ internal class CodeGeneratorVisitor(
         // Some special functions may have empty body, they are handled separately.
         val body = declaration.body ?: return
 
-        usingFileScope(declaration.sourceFileWhenInlined) {
+        bodyScope.usingFileScope(declaration.sourceFileWhenInlined) {
             generateFunction(codegen, declaration,
                     declaration.location(start = true),
                     declaration.location(start = false)) {
-                using(FunctionScope(declaration, this)) {
-                    val parameterScope = ParameterScope(declaration, functionGenerationContext)
+                using(bodyScope.FunctionScope(declaration, this)) {
+                    val parameterScope = bodyScope.ParameterScope(declaration, functionGenerationContext)
                     using(parameterScope) usingParameterScope@{
-                        using(VariableScope()) usingVariableScope@{
+                        using(bodyScope.VariableScope()) usingVariableScope@{
                             val hairComp = hair[declaration]
                             if (hairComp != null) {
-                                hairToBit.generateFunctionBody(currentCodeContext, declaration, hairComp)
+                                hairToBit.generateFunctionBody(functionGenerationContext, declaration, hairComp)
                             } else {
                                 when (body) {
                                     is IrBlockBody -> body.statements.forEach { generateStatement(it) }
@@ -792,7 +541,7 @@ internal class CodeGeneratorVisitor(
         if (!context.shouldContainLocationDebugInfo() || startOffset == UNDEFINED_OFFSET) return null
 
         val [line, column] = if (start) startLineAndColumn() else endLineAndColumn()
-        return LocationInfo(scope = scope()!!, line = line, column = column)
+        return LocationInfo(scope = with(bodyScope) { scope()!! }, line = line, column = column)
     }
 
     //-------------------------------------------------------------------------//
@@ -800,7 +549,7 @@ internal class CodeGeneratorVisitor(
     override fun visitClass(declaration: IrClass) {
         context.log{"visitClass                     : ${ir2string(declaration)}"}
 
-        usingFileScope(declaration.sourceFileWhenInlined) {
+        bodyScope.usingFileScope(declaration.sourceFileWhenInlined) {
             if (!declaration.requiresCodeGeneration()) {
                 // For non-generated annotation classes generate only nested classes.
                 declaration.declarations
@@ -809,7 +558,7 @@ internal class CodeGeneratorVisitor(
                 return
             }
 
-            using(ClassScope(declaration)) {
+            using(bodyScope.ClassScope(declaration)) {
                 runAndProcessInitializers(declaration.konanLibrary) {
                     declaration.declarations.forEach {
                         it.acceptVoid(this)
@@ -898,54 +647,7 @@ internal class CodeGeneratorVisitor(
         functionGenerationContext.jump(destination, result)
     }
 
-    //-------------------------------------------------------------------------//
-
-    /**
-     * Represents the basic block which may expect a value:
-     * when generating a [jump] to this block, one should provide the value.
-     * Inside the block that value is accessible as [valuePhi].
-     *
-     * This class is designed to be used to generate Kotlin expressions that have a value and require branching.
-     *
-     * [valuePhi] may be `null`, which would mean `Unit` value is passed.
-     */
-    private data class ContinuationBlock(val block: LLVMBasicBlockRef, val valuePhi: LLVMValueRef?)
-
-    private val ContinuationBlock.value: LLVMValueRef
-        get() = this.valuePhi ?: codegen.theUnitInstanceRef.llvm
-
-    /**
-     * Jumps to [target] passing [value].
-     */
-    private fun FunctionGenerationContext.jump(target: ContinuationBlock, value: LLVMValueRef?) {
-        val entry = target.block
-        br(entry)
-        if (target.valuePhi != null) {
-            assignPhis(target.valuePhi to value!!)
-        }
-    }
-
-    /**
-     * Creates new [ContinuationBlock] that receives the value of given Kotlin type
-     * and generates [code] starting from its beginning.
-     */
-    private fun continuationBlock(
-            type: IrType, locationInfo: LocationInfo?, code: (ContinuationBlock) -> Unit = {}): ContinuationBlock {
-
-        val entry = functionGenerationContext.basicBlock("continuation_block", locationInfo)
-
-        functionGenerationContext.appendingTo(entry) {
-            val valuePhi = if (type.isUnit()) {
-                null
-            } else {
-                functionGenerationContext.phi(type.toLLVMType(llvm))
-            }
-
-            val result = ContinuationBlock(entry, valuePhi)
-            code(result)
-            return result
-        }
-    }
+    // ContinuationBlock, continuationBlock() → FunctionBodyScope
 
     //-------------------------------------------------------------------------//
 
@@ -977,84 +679,9 @@ internal class CodeGeneratorVisitor(
         return codegen.kNothingFakeValue
     }
 
+    // CatchingScope, CatchScope → FunctionBodyScope
+
     //-------------------------------------------------------------------------//
-
-    /**
-     * The [CodeContext] that catches exceptions.
-     */
-    private inner abstract class CatchingScope : InnerScopeImpl() {
-
-        /**
-         * The LLVM `landingpad` such that if an invoked function throws an exception,
-         * then this exception is passed to [handler].
-         */
-        private val landingpad: LLVMBasicBlockRef by lazy {
-            using(outerContext) {
-                functionGenerationContext.basicBlock("landingpad", endLocationInfoFromScope()) {
-                    genLandingpad()
-                }
-            }
-        }
-
-        /**
-         * The Kotlin exception handler, i.e. the [ContinuationBlock] which gets started
-         * when the exception is caught, receiving this exception as its value.
-         */
-        private val handler by lazy {
-            using(outerContext) {
-                continuationBlock(context.irBuiltIns.throwableClass.owner.defaultType, endLocationInfoFromScope()) {
-                    genHandler(it.value)
-                }
-            }
-        }
-
-        private fun endLocationInfoFromScope(): LocationInfo? {
-            val functionScope = currentCodeContext.functionScope()
-            val irFunction = functionScope?.let {
-                (functionScope as FunctionScope).declaration
-            }
-            return irFunction?.endLocation
-        }
-
-        private fun FunctionGenerationContext.jumpToHandler(exception: LLVMValueRef) {
-            jump(handler, exception)
-        }
-
-        /**
-         * Generates the LLVM `landingpad` that catches C++ exception with type `KotlinException`,
-         * unwraps the Kotlin exception object and jumps to [handler].
-         *
-         * This method generates nearly the same code as `clang++` does for the following:
-         * ```
-         * catch (KotlinException& e) {
-         *     KRef exception = e.exception_;
-         *     return exception;
-         * }
-         * ```
-         * except that our code doesn't check exception `typeid`.
-         *
-         * TODO: why does `clang++` check `typeid` even if there is only one catch clause?
-         */
-        private fun genLandingpad() {
-            with(functionGenerationContext) {
-                val exceptionPtr = catchKotlinException()
-                jumpToHandler(exceptionPtr)
-            }
-        }
-
-        override val exceptionHandler: ExceptionHandler
-            get() = object : ExceptionHandler.Local() {
-                override val unwind get() = landingpad
-
-                override fun genThrow(functionGenerationContext: FunctionGenerationContext, kotlinException: LLVMValueRef) {
-                    // Super class implementation would do too, so this is just an optimization:
-                    // use local jump instead of wrapping to C++ exception, throwing, catching and unwrapping it:
-                    functionGenerationContext.jumpToHandler(kotlinException)
-                }
-            }
-
-        protected abstract fun genHandler(exception: LLVMValueRef)
-    }
 
     /**
      * The [CatchingScope] that handles exceptions using Kotlin `catch` clauses.
@@ -1062,40 +689,6 @@ internal class CodeGeneratorVisitor(
      * @param success the block to be used when the exception is successfully handled;
      * expects `catch` expression result as its value.
      */
-    private inner class CatchScope(private val catches: List<IrCatch>,
-                                   private val success: ContinuationBlock) : CatchingScope() {
-
-        override fun genHandler(exception: LLVMValueRef) {
-
-            for (catch in catches) {
-                fun genCatchBlock() {
-                    using(VariableScope()) {
-                        currentCodeContext.genDeclareVariable(catch.catchParameter, exception)
-                        functionGenerationContext.generateFrameCheck()
-                        evaluateExpressionAndJump(catch.result, success)
-                    }
-                }
-
-                if (catch.catchParameter.type == context.irBuiltIns.throwableType) {
-                    genCatchBlock()
-                    return      // Remaining catch clauses are unreachable.
-                } else {
-                    val isInstance = genInstanceOfImpl(exception, catch.catchParameter.type.getClass()!!)
-                    val body = functionGenerationContext.basicBlock("catch", catch.startLocation)
-                    val nextCheck = functionGenerationContext.basicBlock("catchCheck", catch.endLocation)
-                    functionGenerationContext.condBr(isInstance, body, nextCheck)
-
-                    functionGenerationContext.appendingTo(body) {
-                        genCatchBlock()
-                    }
-
-                    functionGenerationContext.positionAtEnd(nextCheck)
-                }
-            }
-            // rethrow the exception if no clause can handle it.
-            outerContext.exceptionHandler.genThrow(functionGenerationContext, exception)
-        }
-    }
 
     private fun evaluateTry(expression: IrTry): LLVMValueRef {
         // TODO: does basic block order influence machine code order?
@@ -1108,7 +701,7 @@ internal class CodeGeneratorVisitor(
         val catchScope = if (expression.catches.isEmpty())
                              null
                          else
-                             CatchScope(expression.catches, continuation)
+                             bodyScope.CatchScope(expression.catches, continuation)
         using(catchScope) {
             evaluateExpressionAndJump(expression.tryResult, continuation)
         }
@@ -1186,7 +779,7 @@ internal class CodeGeneratorVisitor(
     }
 
     private fun generateDebugTrambolineIf(name: String, expression: IrExpression) {
-        val generationContext = (currentCodeContext.functionScope() as? FunctionScope)?.functionGenerationContext
+        val generationContext = bodyScope.currentFunctionScope?.functionGenerationContext
                 .takeIf { context.config.generateDebugTrampoline }
         generationContext?.basicBlock(name, expression.startLocation)?.let {
             generationContext.br(it)
@@ -1217,7 +810,7 @@ internal class CodeGeneratorVisitor(
     //-------------------------------------------------------------------------//
 
     private fun evaluateWhileLoop(loop: IrWhileLoop): LLVMValueRef {
-        val loopScope = LoopScope(loop)
+        val loopScope = bodyScope.LoopScope(loop)
         using(loopScope) {
             val loopBody = functionGenerationContext.basicBlock("while_loop", loop.startLocation)
             functionGenerationContext.br(loopScope.loopCheck)
@@ -1241,7 +834,7 @@ internal class CodeGeneratorVisitor(
     //-------------------------------------------------------------------------//
 
     private fun evaluateDoWhileLoop(loop: IrDoWhileLoop): LLVMValueRef {
-        val loopScope = LoopScope(loop)
+        val loopScope = bodyScope.LoopScope(loop)
         using(loopScope) {
             val loopBody = functionGenerationContext.basicBlock("do_while_loop", loop.body?.startLocation ?: loop.startLocation)
             functionGenerationContext.br(loopBody)
@@ -1287,40 +880,7 @@ internal class CodeGeneratorVisitor(
     }
 
     //-------------------------------------------------------------------------//
-    private fun debugInfoIfNeeded(function: IrSimpleFunction?, element: IrElement): VariableDebugLocation? {
-        if (function == null || !element.needDebugInfo(context) || currentCodeContext.scope() == null) return null
-        val locationInfo = element.startLocation ?: return null
-        val location = codegen.generateLocationInfo(locationInfo)
-        val file = fileEntry().diFileScope()
-        return when (element) {
-            is IrVariable -> if (shouldGenerateDebugInfo(element)) debugInfoLocalVariableLocation(
-                    builder       = debugInfo.builder,
-                    functionScope = locationInfo.scope,
-                    diType        = with(debugInfo) { element.type.diType(codegen.llvmTargetData) },
-                    name          = element.debugNameConversion(),
-                    file          = file,
-                    line          = locationInfo.line,
-                    location      = location)
-                    else null
-            is IrValueParameter -> debugInfoParameterLocation(
-                    builder       = debugInfo.builder,
-                    functionScope = locationInfo.scope,
-                    diType        = with(debugInfo) { element.type.diType(codegen.llvmTargetData) },
-                    name          = element.debugNameConversion(),
-                    argNo         = function.parameters.indexOf(element) + 1,
-                    file          = file,
-                    line          = locationInfo.line,
-                    location      = location)
-            else -> throw Error("Unsupported element type: ${ir2string(element)}")
-        }
-    }
 
-    private fun shouldGenerateDebugInfo(variable: IrVariable) = when(variable.origin) {
-        IrDeclarationOrigin.FOR_LOOP_IMPLICIT_VARIABLE,
-        IrDeclarationOrigin.FOR_LOOP_ITERATOR,
-        IrDeclarationOrigin.IR_TEMPORARY_VARIABLE -> false
-        else -> true
-    }
 
     private fun generateVariable(variable: IrVariable) {
         context.log { "generateVariable               : ${ir2string(variable)}" }
@@ -1335,7 +895,7 @@ internal class CodeGeneratorVisitor(
             value: LLVMValueRef?
     ) = genDeclareVariable(
             variable, value, debugInfoIfNeeded(
-            (functionScope() as FunctionScope).declaration, variable))
+            bodyScope.currentFunctionScope?.declaration, variable))
 
     //-------------------------------------------------------------------------//
 
@@ -1930,144 +1490,23 @@ internal class CodeGeneratorVisitor(
 
     //-------------------------------------------------------------------------//
 
-    private inner class InlinedBlockScope(val inlinedBlock: IrInlinedFunctionBlock) : FileScope(file = null, inlinedBlock.inlinedFunctionFileEntry) {
-
-        private val inlineFunctionScope: DIScopeOpaqueRef? by lazy {
-            val owner = inlinedBlock.inlinedFunctionSymbol?.owner
-            require(owner == null || owner is IrSimpleFunction) { "Inline constructors should've been lowered: ${owner?.render()}" }
-            if (owner != null && owner.startOffset != UNDEFINED_OFFSET) {
-                owner.scope(fileEntry().line(inlinedBlock.inlinedFunctionStartOffset))
-            } else {
-                @Suppress("UNCHECKED_CAST")
-                debugInfo.diFunctionScope(
-                        inlinedBlock.inlinedFunctionFileEntry,
-                        name = "<inlined-lambda>",
-                        linkageName = "<inlined-lambda>",
-                        inlinedBlock.inlinedFunctionFileEntry.line(inlinedBlock.inlinedFunctionStartOffset),
-                        debugInfo.subroutineType(debugInfo.llvmTargetData, listOf(inlinedBlock.type)),
-                        nodebug = false,
-                        isTransparentStepping = false
-                ) as DIScopeOpaqueRef
-            }
-        }
-
-        override fun location(offset: Int): LocationInfo? {
-            val diScope = inlineFunctionScope ?: return null
-            val inlinedAt = outerContext.location(inlinedBlock.startOffset) ?: return null
-            val [line, column] = fileEntry.lineAndColumn(offset)
-            return LocationInfo(diScope, line, column, inlinedAt)
-        }
-
-        override fun scope(): DIScopeOpaqueRef? {
-            return inlineFunctionScope.takeIf { context.shouldContainLocationDebugInfo() && inlinedBlock.startOffset != UNDEFINED_OFFSET }
-        }
-
-        override fun wrapException(e: Exception): NativeCodeGeneratorException {
-            return NativeCodeGeneratorException.wrap(e, inlinedBlock.inlinedFunctionSymbol?.owner)
-        }
-    }
-
-    //-------------------------------------------------------------------------//
-    private inner class ReturnableBlockScope(val returnableBlock: IrReturnableBlock, val resultSlot: LLVMValueRef?) : InnerScopeImpl() {
-
-        var bbExit : LLVMBasicBlockRef? = null
-        var resultPhi : LLVMValueRef? = null
-
-        private fun getExit(): LLVMBasicBlockRef {
-            val location = returnableBlock.statements.lastOrNull()?.let {
-                location(it.endOffset)
-            }
-            if (bbExit == null) bbExit = functionGenerationContext.basicBlock("returnable_block_exit", location)
-            return bbExit!!
-        }
-
-        private fun getResult(): LLVMValueRef {
-            if (resultPhi == null) {
-                val bbCurrent = functionGenerationContext.currentBlock
-                functionGenerationContext.positionAtEnd(getExit())
-                resultPhi = functionGenerationContext.phi(returnableBlock.type.toLLVMType(llvm))
-                functionGenerationContext.positionAtEnd(bbCurrent)
-            }
-            return resultPhi!!
-        }
-
-        override fun genReturn(target: IrSymbolOwner, value: LLVMValueRef?) {
-            if (target != returnableBlock) {                                    // It is not our "local return".
-                super.genReturn(target, value)
-                return
-            }
-                                                                                // It is local return from current function.
-            functionGenerationContext.br(getExit())                                               // Generate branch on exit block.
-
-            if (!returnableBlock.type.isUnit()) {                               // If function returns more then "unit"
-                functionGenerationContext.assignPhis(getResult() to value!!)                      // Assign return value to result PHI node.
-            }
-        }
-
-        override fun getReturnSlot(target: IrSymbolOwner) : LLVMValueRef? {
-            return if (target == returnableBlock) {
-                resultSlot
-            } else {
-                super.getReturnSlot(target)
-            }
-        }
-
-        override fun returnableBlockScope(): CodeContext? = this
-    }
 
     //-------------------------------------------------------------------------//
 
-    private inline fun <R> usingFileScope(fileEntry: IrFileEntry?, block: () -> R): R {
-        val fileScope = if (fileEntry != null && fileEntry != fileEntry()) {
-            FileScope(null, fileEntry)
-        } else {
-            null
-        }
-        return using(fileScope, block)
-    }
+    //-------------------------------------------------------------------------//
 
-    private open inner class FileScope(private val file: IrFile?, val fileEntry: IrFileEntry) : InnerScopeImpl() {
-        override fun fileScope(): CodeContext? = this
 
-        override fun location(offset: Int) = scope()?.let {
-            val [line, column] = fileEntry.lineAndColumn(offset)
-            LocationInfo(it, line, column)
-        }
-
-        @Suppress("UNCHECKED_CAST")
-        private val scope by lazy {
-            if (!context.shouldContainLocationDebugInfo())
-                return@lazy null
-            fileEntry.diFileScope() as DIScopeOpaqueRef?
-        }
-
-        override fun scope() = scope
-
-        override fun wrapException(e: Exception) = NativeCodeGeneratorException.wrap(e, file)
-    }
 
     //-------------------------------------------------------------------------//
 
-    private inner class ClassScope(val clazz:IrClass) : InnerScopeImpl() {
-        val isExported
-            get() = clazz.isExported()
-        var offsetInBits = 0L
-        val members = mutableListOf<DIDerivedTypeRef>()
-        @Suppress("UNCHECKED_CAST")
-        val scope = if (isExported && context.shouldContainDebugInfo())
-            debugInfo.objHeaderPointerType
-        else null
-        override fun classScope(): CodeContext? = this
-        override fun wrapException(e: Exception) = NativeCodeGeneratorException.wrap(e, clazz)
-    }
 
     //-------------------------------------------------------------------------//
     private fun evaluateReturnableBlock(value: IrReturnableBlock, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateReturnableBlock         : ${value.statements.forEach { ir2string(it) }}"}
 
-        val returnableBlockScope = ReturnableBlockScope(value, resultSlot)
+        val returnableBlockScope = bodyScope.ReturnableBlockScope(value, resultSlot)
         using(returnableBlockScope) {
-            using(VariableScope()) {
+            using(bodyScope.VariableScope()) {
                 value.statements.forEach {
                     generateStatement(it)
                 }
@@ -2094,7 +1533,7 @@ internal class CodeGeneratorVisitor(
     private fun evaluateInlinedBlock(value: IrInlinedFunctionBlock, resultSlot: LLVMValueRef?): LLVMValueRef {
         context.log{"evaluateInlinedBlock         : ${value.statements.forEach { ir2string(it) }}"}
 
-        val inlinedBlockScope = InlinedBlockScope(value)
+        val inlinedBlockScope = bodyScope.InlinedBlockScope(value)
         generateDebugTrambolineIf("inline", value)
 
         // Even though the function was inlined, the edge [caller -> callee] still needs to be recorded (generally).
@@ -2112,7 +1551,7 @@ internal class CodeGeneratorVisitor(
         val scope = if (value.isTransparentScope) {
             null
         } else {
-            VariableScope()
+            bodyScope.VariableScope()
         }
 
         using(scope) {
@@ -2150,11 +1589,10 @@ internal class CodeGeneratorVisitor(
     }
 
     //-------------------------------------------------------------------------//
-    private fun fileEntry(): IrFileEntry = (currentCodeContext.fileScope() as FileScope).fileEntry
 
     //-------------------------------------------------------------------------//
     private fun updateBuilderDebugLocation(element: IrElement) {
-        if (!context.shouldContainLocationDebugInfo() || currentCodeContext.functionScope() == null || element.startLocation == null) return
+        if (!context.shouldContainLocationDebugInfo() || bodyScope.currentFunctionScope == null || element.startLocation == null) return
         functionGenerationContext.debugLocation(element.startLocation!!, element.endLocation!!)
     }
 
@@ -2177,7 +1615,7 @@ internal class CodeGeneratorVisitor(
 
     //-------------------------------------------------------------------------//
     private fun debugFieldDeclaration(expression: IrField) {
-        val scope = currentCodeContext.classScope() as? ClassScope ?: return
+        val scope = currentCodeContext.classScope() as? FunctionBodyScope.ClassScope ?: return
         if (!scope.isExported || !context.shouldContainDebugInfo()) return
         with(debugInfo) {
             val fileEntry = fileEntry()
@@ -2203,54 +1641,6 @@ internal class CodeGeneratorVisitor(
 
     private fun IrFileEntry.diFileScope() = with(debugInfo) { diFileScope() }
 
-    // Saved calculated IrFunction scope which is used several time for getting locations and generating debug info.
-    private var irFunctionSavedScope: Pair<IrSimpleFunction, DIScopeOpaqueRef?>? = null
-
-    private fun IrSimpleFunction.scope(): DIScopeOpaqueRef? = if (startOffset != UNDEFINED_OFFSET) (
-            if (irFunctionSavedScope != null && this == irFunctionSavedScope!!.first)
-                irFunctionSavedScope!!.second
-            else
-                this.scope(startLine()).also { irFunctionSavedScope = Pair(this, it) }
-            ) else null
-
-    @Suppress("UNCHECKED_CAST")
-    private fun IrSimpleFunction.scope(startLine:Int): DIScopeOpaqueRef? {
-        if (!context.shouldContainLocationDebugInfo())
-            return null
-
-        val functionLlvmValue = when {
-            isReifiedInline -> null
-            // TODO: May be tie up inline lambdas to their outer function?
-            codegen.isExternal(this) && !KonanBinaryInterface.isExported(this) -> null
-            isSuspend -> this.getOrCreateFunctionWithContinuationStub(context).let { codegen.llvmFunctionOrNull(it) }
-            else -> codegen.llvmFunctionOrNull(this)
-        }
-        return with(debugInfo) {
-            val f = this@scope
-            val nodebug = f.originalConstructor != null && f.parentAsClass.isSubclassOf(context.irBuiltIns.throwableClass.owner)
-            if (functionLlvmValue != null) {
-                subprograms.getOrPut(functionLlvmValue) {
-                    // Also enable transparent stepping if this function marked with @TransparentForDebugger:
-                    val isTransparentStepping = generationState.config.enableDebugTransparentStepping
-                            && f.hasAnnotation(KonanFqNames.transparentForDebugger)
-
-                    diFunctionScope(fileEntry(), functionLlvmValue.name!!, startLine, nodebug, isTransparentStepping).also {
-                        if (!this@scope.isInline)
-                            functionLlvmValue.addDebugInfoSubprogram(it)
-                    }
-                } as DIScopeOpaqueRef
-            } else {
-                inlinedSubprograms.getOrPut(this@scope) {
-                    diFunctionScope(fileEntry(), "<inlined-out:$name>", startLine, nodebug)
-                } as DIScopeOpaqueRef
-            }
-        }
-
-    }
-
-    private fun IrSimpleFunction.returnsUnit() = returnType.isUnit().also {
-        require(!isSuspend) { "Suspend functions should be lowered out at this point"}
-    }
 
     /**
      * Evaluates all arguments of [expression] that are explicitly represented in the IR.
@@ -2287,13 +1677,6 @@ internal class CodeGeneratorVisitor(
 
     //-------------------------------------------------------------------------//
 
-    private inner class SuspendableExpressionScope(val resumePoints: MutableList<LLVMBasicBlockRef>) : InnerScopeImpl() {
-        override fun addResumePoint(bbLabel: LLVMBasicBlockRef): Int {
-            val result = resumePoints.size
-            resumePoints.add(bbLabel)
-            return result
-        }
-    }
 
     private fun evaluateSuspendableExpression(expression: IrSuspendableExpression, resultSlot: LLVMValueRef?): LLVMValueRef {
         val suspensionPointId = evaluateExpression(expression.suspensionPointId)
@@ -2301,7 +1684,7 @@ internal class CodeGeneratorVisitor(
         val bbDispatch = functionGenerationContext.basicBlock("dispatch", expression.suspensionPointId.startLocation)
 
         val resumePoints = mutableListOf<LLVMBasicBlockRef>()
-        using (SuspendableExpressionScope(resumePoints)) {
+        using (bodyScope.SuspendableExpressionScope(resumePoints)) {
             functionGenerationContext.condBr(functionGenerationContext.icmpEq(suspensionPointId, llvm.kNull), bbStart, bbDispatch)
 
             functionGenerationContext.positionAtEnd(bbStart)
@@ -2314,22 +1697,12 @@ internal class CodeGeneratorVisitor(
         }
     }
 
-    private inner class SuspensionPointScope(val suspensionPointId: IrVariable,
-                                             val bbResume: LLVMBasicBlockRef,
-                                             val bbResumeId: Int): InnerScopeImpl() {
-        override fun genGetValue(value: IrValueDeclaration, resultSlot: LLVMValueRef?): LLVMValueRef {
-            if (value == suspensionPointId) {
-                return functionGenerationContext.blockAddress(bbResume)
-            }
-            return super.genGetValue(value, resultSlot)
-        }
-    }
 
     private fun evaluateSuspensionPoint(expression: IrSuspensionPoint): LLVMValueRef {
         val bbResume = functionGenerationContext.basicBlock("resume", expression.resumeResult.startLocation)
         val id = currentCodeContext.addResumePoint(bbResume)
 
-        using (SuspensionPointScope(expression.suspensionPointIdParameter, bbResume, id)) {
+        using (bodyScope.SuspensionPointScope(expression.suspensionPointIdParameter, bbResume, id)) {
             continuationBlock(expression.type, expression.result.startLocation).run {
                 val normalResult = evaluateExpression(expression.result)
                 functionGenerationContext.jump(this, normalResult)
@@ -2841,33 +2214,7 @@ internal class CodeGeneratorVisitor(
     }
 }
 
-private val thisName = Name.special("<this>")
-private val underscoreThisName = Name.identifier("_this")
-private val doubleUnderscoreThisName = Name.identifier("__this")
-
-/**
- * HACK: this is workaround for GH-2316, to let IDE some how operate with this.
- * We're experiencing issue with libclang which is used as compiler of expression in lldb
- * for current state support Kotlin in lldb:
- *   1. <this> isn't accepted by libclang as valid variable name.
- *   2. this is reserved name and compiled in special way.
- */
-private fun IrValueDeclaration.debugNameConversion(): Name {
-    if (name == thisName) {
-        return when (origin) {
-            IrDeclarationOrigin.IR_TEMPORARY_VARIABLE_FOR_INLINED_EXTENSION_RECEIVER -> doubleUnderscoreThisName
-            else -> underscoreThisName
-        }
-    }
-    return name
-}
-
-internal class LocationInfo(val scope: DIScopeOpaqueRef,
-                            val line: Int,
-                            val column: Int,
-                            val inlinedAt: LocationInfo? = null)
-
-internal fun NativeGenerationState.generateRuntimeConstantsModule() : LLVMModuleRef {
+internal fun NativeGenerationState.generateRuntimeConstantsModule(): LLVMModuleRef {
     val llvmModule = LLVMModuleCreateWithNameInContext("constants", llvmContext)!!
     LLVMSetDataLayout(llvmModule, runtime.dataLayout)
     val static = StaticData(llvmModule, llvm)
@@ -2893,3 +2240,25 @@ internal fun NativeGenerationState.generateRuntimeConstantsModule() : LLVMModule
 
     return llvmModule
 }
+
+private val thisName = Name.special("<this>")
+private val underscoreThisName = Name.identifier("_this")
+private val doubleUnderscoreThisName = Name.identifier("__this")
+
+/**
+ * HACK: this is workaround for GH-2316, to let IDE some how operate with this.
+ * We're experiencing issue with libclang which is used as compiler of expression in lldb
+ * for current state support Kotlin in lldb:
+ *   1. <this> isn't accepted by libclang as valid variable name.
+ *   2. this is reserved name and compiled in special way.
+ */
+private fun IrValueDeclaration.debugNameConversion(): Name {
+    if (name == thisName) {
+        return when (origin) {
+            IrDeclarationOrigin.IR_TEMPORARY_VARIABLE_FOR_INLINED_EXTENSION_RECEIVER -> doubleUnderscoreThisName
+            else -> underscoreThisName
+        }
+    }
+    return name
+}
+
