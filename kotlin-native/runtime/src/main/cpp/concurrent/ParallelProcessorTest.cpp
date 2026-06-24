@@ -8,7 +8,10 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+#include <atomic>
+#include <cstdint>
 #include <list>
+#include <optional>
 #include <vector>
 
 #include "IntrusiveList.hpp"
@@ -71,6 +74,37 @@ constexpr auto kBatchPoolSize = 4;
 using Processor = ParallelProcessor<ListImpl, kBatchSize, kBatchPoolSize>;
 using Worker = typename Processor::Worker;
 using WorkSource = typename Processor::WorkSource;
+
+// BoundedQueue::dequeue() is permitted to report "empty" while a batch is actually
+// present: on a weak memory model its acquire-load of the head cell's sequence_ may
+// lag the producer's release-store. That stale read is the root of KT-86432, but on
+// a strongly-ordered host (e.g. Apple silicon) it is practically unhittable by
+// timing. StaleReadBoundedQueue reproduces it on demand: while staleReadEveryN is
+// N > 0, every N-th dequeue() returns nothing.
+std::atomic<std::uint64_t> staleReadEveryN{0};
+
+template <typename T, std::size_t kCapacity>
+class StaleReadBoundedQueue : public BoundedQueue<T, kCapacity> {
+public:
+    std::optional<T> dequeue() {
+        if (std::uint64_t n = staleReadEveryN.load(std::memory_order_relaxed)) {
+            if (dequeueCount_.fetch_add(1, std::memory_order_relaxed) % n == 0) {
+                return std::nullopt;
+            }
+        }
+        return BoundedQueue<T, kCapacity>::dequeue();
+    }
+
+private:
+    std::atomic<std::uint64_t> dequeueCount_{0};
+};
+
+// Small batches keep many batches in flight, so dequeue() (and the injected stale
+// read) fire frequently.
+constexpr auto kStressBatchSize = 4;
+constexpr auto kStressBatchPoolSize = 64; // power of 2, as BoundedQueue suggests
+using StressProcessor = ParallelProcessor<ListImpl, kStressBatchSize, kStressBatchPoolSize, StaleReadBoundedQueue>;
+using StressWorker = typename StressProcessor::Worker;
 
 } // namespace
 
@@ -203,4 +237,60 @@ TEST(ParallelProcessorTest, ForceFlushWithOverflow) {
     // now can flush
     EXPECT_THAT(source.forceFlush(), true);
     EXPECT_THAT(source.retainsNoWork(), true);
+}
+
+TEST(ParallelProcessorTest, NoWorkStrandedOnTermination) {
+    // With dequeue() injecting the KT-86432 stale read, a worker can see the shared
+    // queue as empty while batches remain. If it is the last worker going to sleep,
+    // it declares termination (sets allDone_) and the still-queued work is never
+    // processed -- which is what this test catches.
+    staleReadEveryN.store(4, std::memory_order_relaxed);
+    struct SeamReset {
+        ~SeamReset() { staleReadEveryN.store(0, std::memory_order_relaxed); }
+    } seamReset;
+
+    constexpr int kWorkers = 4;
+    constexpr std::size_t kSeedBatches = 48; // must be <= kStressBatchPoolSize
+    constexpr std::size_t kSeedTasks = kSeedBatches * kStressBatchSize;
+    constexpr int kIterations = 500;
+
+    for (int iteration = 0; iteration < kIterations; ++iteration) {
+        auto tasks = createWork(kSeedTasks);
+        std::atomic<int> processed{0};
+        std::atomic<bool> processedTwice{false};
+        StressProcessor processor;
+
+        // Seed all the work into the shared queue up front, from a non-worker
+        // source, so the registered workers are exactly the draining threads.
+        {
+            StressProcessor::WorkSource source(processor);
+            offerWork(source, tasks);
+            RuntimeAssert(source.forceFlush(), "seed must fit into the shared pool");
+        }
+
+        std::atomic<bool> start{false};
+        std::list<ScopedThread> threads;
+        for (int w = 0; w < kWorkers; ++w) {
+            threads.emplace_back([&] {
+                StressWorker worker(processor);
+                while (!start.load(std::memory_order_acquire)) {
+                }
+                while (Task* task = worker.tryPop()) {
+                    if (task->done_.exchange(true, std::memory_order_relaxed)) {
+                        processedTwice.store(true, std::memory_order_relaxed);
+                    }
+                    processed.fetch_add(1, std::memory_order_relaxed);
+                }
+            });
+        }
+        start.store(true, std::memory_order_release);
+        for (auto& t : threads) {
+            t.join();
+        }
+
+        ASSERT_FALSE(processedTwice.load()) << "iteration " << iteration;
+        ASSERT_EQ(processed.load(), static_cast<int>(kSeedTasks))
+                << "Work stranded by premature termination at iteration " << iteration << "; "
+                << (static_cast<int>(kSeedTasks) - processed.load()) << " task(s) never processed";
+    }
 }

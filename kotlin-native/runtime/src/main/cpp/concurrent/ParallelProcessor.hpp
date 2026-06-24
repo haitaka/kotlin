@@ -22,7 +22,11 @@ namespace kotlin {
  * -  Every instantiated worker must execute `tryPop` sooner or later;
  * -  Every instantiated worker must finish execution before the destruction of the processor;
  */
-template <typename ListImpl, std::size_t kBatchSize, std::size_t kBatchesPoolSize>
+template <
+        typename ListImpl,
+        std::size_t kBatchSize,
+        std::size_t kBatchesPoolSize,
+        template <typename, std::size_t> class SharedQueue = BoundedQueue>
 class ParallelProcessor : private Pinned {
 private:
     class Batch {
@@ -276,7 +280,7 @@ private:
         return false;
     }
 
-    BoundedQueue<Batch, kBatchesPoolSize> sharedBatches_;
+    SharedQueue<Batch, kBatchesPoolSize> sharedBatches_;
 
     std::atomic<size_t> registeredWorkers_ = 0;
     std::atomic<size_t> waitingWorkers_ = 0;
