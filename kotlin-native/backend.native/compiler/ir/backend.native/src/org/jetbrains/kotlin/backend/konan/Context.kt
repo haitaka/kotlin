@@ -33,6 +33,7 @@ import org.jetbrains.kotlin.ir.types.IrTypeSystemContextImpl
 import org.jetbrains.kotlin.ir.util.ReferenceSymbolTable
 import org.jetbrains.kotlin.ir.util.isTrivialGetter
 import org.jetbrains.kotlin.ir.util.render
+import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import org.jetbrains.kotlin.resolve.descriptorUtil.module
 import org.jetbrains.kotlin.utils.addToStdlib.getOrSetIfNull
 import java.nio.file.Path
@@ -109,6 +110,38 @@ internal class Context(
     }
 
     lateinit var globalHierarchyAnalysisResult: GlobalHierarchyAnalysisResult
+
+    // True once a class hierarchy numbering (DFS intervals) has been computed for this compilation — either
+    // the monolithic GHAPhase or the whole-link-set GlobalHierarchyNumberingPhase. Drives the fast class
+    // subtype check and the emission of per-class ClassHierarchyIds globals with real values.
+    var classHierarchyNumberingComputed: Boolean = false
+
+    // Whole-link-set interface ids (colors) keyed by TypeInfo symbol name, computed by the metadata-driven
+    // GlobalHierarchyNumberingPhase. The final link emits strong kifaceid globals for cached interfaces from this.
+    var linkSetInterfaceIds: Map<String, Int> = emptyMap()
+
+    // Whole-link-set class DFS intervals [lo, hi] keyed by TypeInfo symbol name. The final link emits strong
+    // kclassids globals for cached classes from this.
+    var linkSetClassIntervals: Map<String, Pair<Int, Int>> = emptyMap()
+
+    // Hierarchy summaries of classes materialized by consumed caches (loaded from their class_hierarchy sidecar).
+    // The final link emits their kclassids/kifaceid globals by name, without deserializing the cached IR.
+    var cachedHierarchyRecords: List<org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy> = emptyList()
+
+    // Fresh + cached hierarchy summaries of the whole link set, used to emit every class's kitable by name.
+    var allHierarchyRecords: List<org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy> = emptyList()
+
+    // True in the final-link build that consumes static caches: the interface itables + ids are provided by
+    // the numbering pass via kitable/kifaceid/mask globals, and codegen reads them. Set by
+    // GlobalHierarchyNumberingPhase; distinguishes the caches path from monolithic GHA.
+    var lateInterfaceScheme: Boolean = false
+
+    // True whenever static caches are involved (building or consuming one), excluding frameworks: interface
+    // itables are emitted in the cache style (exported per-interface vtable arrays + an external `kitable`
+    // pointer the numbering pass fills in) rather than baked inline. Keep cache-build and consume consistent.
+    val emitCacheStyleItables: Boolean
+        get() = config.produce != CompilerOutputKind.FRAMEWORK &&
+                (config.produce.isCache || config.cachedLibraries.hasStaticCaches)
 
     override val typeSystem: IrTypeSystemContext
         get() = IrTypeSystemContextImpl(irBuiltIns)

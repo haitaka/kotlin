@@ -70,6 +70,8 @@ class OutputFiles(val outputName: String, target: KonanTarget, val produce: Comp
 
     val classFieldsFile = tempCacheDirectory?.cacheIrPart()?.child(CachedLibraries.CLASS_FIELDS_FILE_NAME)
 
+    val classHierarchyFile = tempCacheDirectory?.cacheIrPart()?.child(CachedLibraries.CLASS_HIERARCHY_FILE_NAME)
+
     val eagerInitializedPropertiesFile = tempCacheDirectory?.cacheIrPart()?.child(CachedLibraries.EAGER_INITIALIZED_PROPERTIES_FILE_NAME)
 
     val trivialGettersFile = tempCacheDirectory?.cacheIrPart()?.child(CachedLibraries.TRIVIAL_GETTERS_FILE_NAME)

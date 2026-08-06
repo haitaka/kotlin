@@ -538,6 +538,81 @@ internal object ClassFieldsSerializer : IdSignatureAwareSerializer<SerializedCla
     }
 }
 
+/**
+ * A compact summary of one class/interface the cache actually materialized (RTTIGenerator emitted RTTI for it).
+ * Keyed by the class's TypeInfo symbol name — the same name all link-set globals use (`kclassids:`, `kitable:`,
+ * `kifaceid:`, `kifacevtable:`) — so the consumer's numbering + itable builder can run entirely off this summary,
+ * without deserializing the cached IR. IdSignatures are intentionally not stored: the symbol name is the stable,
+ * link-level identity everything is keyed by.
+ */
+class SerializedClassHierarchy(
+        val typeInfoSymbolName: String,
+        val isInterface: Boolean,
+        // Whether this class got a materialized interface table (`kitable`/`kifacevtable` arrays), i.e.
+        // RTTIGenerator's `needInterfaceTable` (non-interface, non-abstract, non-ObjC). Only such classes may
+        // have a `kitable` emitted by the consumer, since only they exported the per-interface vtable arrays.
+        val hasInterfaceTable: Boolean,
+        // Immediate super class's TypeInfo symbol name; "" for kotlin.Any and for interfaces.
+        val superTypeInfoSymbolName: String,
+        // Implemented interfaces (requiresRtti-filtered) and, in parallel, each interface's vtable size.
+        val interfaceNames: Array<String>,
+        val interfaceVTableSizes: IntArray,
+) {
+    // Origin of this record, filled in when read from a cache (null for fresh records built in the consumer).
+    // Used to emit a class's `kitable` only when its cache file is actually linked into the final binary, so
+    // the referenced `kifacevtable` arrays are guaranteed present (plain strong references, no weak fallback).
+    // `cacheFileId` is the per-file cache id ([CacheSupport.cacheFileId]); null for a monolithic (whole-module)
+    // cache, which is linked wholesale.
+    var cacheLibraryName: String? = null
+    var cacheFileId: String? = null
+}
+
+internal object ClassHierarchySerializer {
+    fun serialize(records: List<SerializedClassHierarchy>): ByteArray {
+        val stringTable = buildStringTable {
+            records.forEach {
+                +it.typeInfoSymbolName
+                +it.superTypeInfoSymbolName
+                it.interfaceNames.forEach { name -> +name }
+            }
+        }
+        val size = stringTable.sizeBytes + records.sumOf { Int.SIZE_BYTES * (5 + it.interfaceNames.size * 2) }
+        val stream = ByteArrayStream(ByteArray(size))
+        stringTable.serialize(stream)
+        records.forEach { record ->
+            stream.writeInt(stringTable.indices[record.typeInfoSymbolName]!!)
+            stream.writeInt(if (record.isInterface) 1 else 0)
+            stream.writeInt(if (record.hasInterfaceTable) 1 else 0)
+            stream.writeInt(stringTable.indices[record.superTypeInfoSymbolName]!!)
+            stream.writeInt(record.interfaceNames.size)
+            for (i in record.interfaceNames.indices) {
+                stream.writeInt(stringTable.indices[record.interfaceNames[i]]!!)
+                stream.writeInt(record.interfaceVTableSizes[i])
+            }
+        }
+        return stream.buf
+    }
+
+    fun deserializeTo(data: ByteArray, result: MutableList<SerializedClassHierarchy>) {
+        val stream = ByteArrayStream(data)
+        val stringTable = StringTable.deserialize(stream)
+        while (stream.hasData()) {
+            val name = stringTable[stream.readInt()]
+            val isInterface = stream.readInt() != 0
+            val hasInterfaceTable = stream.readInt() != 0
+            val superName = stringTable[stream.readInt()]
+            val interfaceCount = stream.readInt()
+            val interfaceNames = Array(interfaceCount) { "" }
+            val interfaceVTableSizes = IntArray(interfaceCount)
+            for (i in 0 until interfaceCount) {
+                interfaceNames[i] = stringTable[stream.readInt()]
+                interfaceVTableSizes[i] = stream.readInt()
+            }
+            result.add(SerializedClassHierarchy(name, isInterface, hasInterfaceTable, superName, interfaceNames, interfaceVTableSizes))
+        }
+    }
+}
+
 class SerializedEagerInitializedFile(val file: SerializedFileReference)
 
 class SerializedTrivialGetter(

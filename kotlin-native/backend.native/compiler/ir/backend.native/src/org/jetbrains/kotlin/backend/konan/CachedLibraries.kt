@@ -55,6 +55,7 @@ class CachedLibraries(
         val binariesPaths by lazy { computeBinariesPaths() }
         val serializedInlineFunctionBodies by lazy { computeSerializedInlineFunctionBodies() }
         val serializedClassFields by lazy { computeSerializedClassFields() }
+        val serializedClassHierarchy by lazy { computeSerializedClassHierarchy() }
         val serializedEagerInitializedFiles by lazy { computeSerializedEagerInitializedFiles() }
         val serializedTrivialGetters by lazy { computeSerializedTrivialGetters() }
 
@@ -62,6 +63,7 @@ class CachedLibraries(
         protected abstract fun computeBinariesPaths(): List<String>
         protected abstract fun computeSerializedInlineFunctionBodies(): List<SerializedInlineFunctionReference>
         protected abstract fun computeSerializedClassFields(): List<SerializedClassFields>
+        protected abstract fun computeSerializedClassHierarchy(): List<SerializedClassHierarchy>
         protected abstract fun computeSerializedEagerInitializedFiles(): List<SerializedEagerInitializedFile>
         protected abstract fun computeSerializedTrivialGetters(): List<SerializedTrivialGetter>
 
@@ -92,6 +94,12 @@ class CachedLibraries(
                 val directory = File(path).absoluteFile.parentFile.parentFile
                 val data = directory.child(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).child(CLASS_FIELDS_FILE_NAME).readBytes()
                 ClassFieldsSerializer.deserializeTo(data, it)
+            }
+
+            override fun computeSerializedClassHierarchy() = mutableListOf<SerializedClassHierarchy>().also {
+                val directory = File(path).absoluteFile.parentFile.parentFile
+                val file = directory.child(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).child(CLASS_HIERARCHY_FILE_NAME)
+                if (file.exists) ClassHierarchySerializer.deserializeTo(file.readBytes(), it)
             }
 
             override fun computeSerializedEagerInitializedFiles() = mutableListOf<SerializedEagerInitializedFile>().also {
@@ -151,6 +159,20 @@ class CachedLibraries(
                 existingFileDirs.forEach { fileDir ->
                     val data = fileDir.child(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).child(CLASS_FIELDS_FILE_NAME).readBytes()
                     ClassFieldsSerializer.deserializeTo(data, it)
+                }
+            }
+
+            override fun computeSerializedClassHierarchy() = mutableListOf<SerializedClassHierarchy>().also { result ->
+                existingFileDirs.forEach { fileDir ->
+                    val file = fileDir.child(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).child(CLASS_HIERARCHY_FILE_NAME)
+                    if (file.exists) {
+                        val fileRecords = mutableListOf<SerializedClassHierarchy>()
+                        ClassHierarchySerializer.deserializeTo(file.readBytes(), fileRecords)
+                        // Tag with the per-file cache id (the file dir name), so the consumer can emit a class's
+                        // itable only when this file is linked. Matches DependenciesTracker.FileDependency.name.
+                        fileRecords.forEach { it.cacheFileId = fileDir.name }
+                        result.addAll(fileRecords)
+                    }
                 }
             }
 
@@ -307,6 +329,7 @@ class CachedLibraries(
         const val BITCODE_DEPENDENCIES_FILE_NAME = "bitcode_deps"
         const val INLINE_FUNCTION_BODIES_FILE_NAME = "inline_bodies"
         const val CLASS_FIELDS_FILE_NAME = "class_fields"
+        const val CLASS_HIERARCHY_FILE_NAME = "class_hierarchy"
         const val EAGER_INITIALIZED_PROPERTIES_FILE_NAME = "eager_init"
         const val TRIVIAL_GETTERS_FILE_NAME = "trivial_getters"
     }

@@ -9,21 +9,122 @@ import org.jetbrains.kotlin.backend.common.phaser.KotlinBackendIrHolder
 import org.jetbrains.kotlin.backend.common.phaser.createSimpleNamedCompilerPhase
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultIrActions
+import org.jetbrains.kotlin.backend.konan.ir.ClassGlobalHierarchyInfo
 import org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysis
+import org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysisResult
+import org.jetbrains.kotlin.backend.konan.ir.computeLinkSetHierarchyNumbering
+import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
+import org.jetbrains.kotlin.backend.konan.ir.implementedInterfaces
+import org.jetbrains.kotlin.backend.konan.ir.isAbstract
+import org.jetbrains.kotlin.backend.konan.requiresRtti
+import org.jetbrains.kotlin.ir.objcinterop.isObjCClass
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
+import org.jetbrains.kotlin.backend.konan.llvm.typeInfoSymbolName
+import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
+import org.jetbrains.kotlin.ir.types.isAny
+import org.jetbrains.kotlin.library.uniqueName
 import org.jetbrains.kotlin.backend.konan.optimizations.*
 import org.jetbrains.kotlin.backend.konan.optimizations.DevirtualizationAnalysis
 import org.jetbrains.kotlin.backend.konan.optimizations.ModuleDFG
 import org.jetbrains.kotlin.backend.konan.optimizations.ModuleDFGBuilder
 import org.jetbrains.kotlin.backend.konan.optimizations.dce
 import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
+import org.jetbrains.kotlin.ir.util.isInterface
+import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
+import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
+import org.jetbrains.kotlin.ir.visitors.acceptVoid
 
 internal val GHAPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
         name = "GHAPhase",
         op = { generationState, irModule ->
-            GlobalHierarchyAnalysis(generationState.context, irModule).run()
+            GlobalHierarchyAnalysis(generationState.context, listOf(irModule)).run()
+            generationState.context.classHierarchyNumberingComputed = true
+        }
+)
+
+/**
+ * "Second pass on the link set" for static caches, driven by metadata rather than IR. The codegen `module` is a
+ * partial view (cached libraries excluded), so the whole-program interface coloring + class DFS intervals are
+ * computed over the fresh module's classes merged with every consumed cache's `class_hierarchy` summary — no
+ * cached IR is deserialized. The result is delivered to each class/interface through per-class globals the final
+ * link defines with strong linkage (kclassids/kifaceid/kitable), overriding each cache's weak defaults; fresh
+ * classes additionally get their `hierarchyInfo` set here so RTTIGenerator emits them normally. bitsPerColor is
+ * published so `ghaEnabled()` becomes true and the itable mask is known.
+ */
+internal val GlobalHierarchyNumberingPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
+        name = "GlobalHierarchyNumbering",
+        op = { generationState, module ->
+            val context = generationState.context
+            System.err.println("IFACEDBG numbering-pass RUNS produce=${context.config.produce} hasStaticCaches=${context.config.cachedLibraries.hasStaticCaches} emitCacheStyle=${context.emitCacheStyleItables} releaseBinCache=${context.config.enableReleaseBinaryCache}")
+
+            // Fresh records: every materialized class/interface in the codegen module (main module + merged
+            // non-cached deps). Mirrors what a cache would have serialized for the same classes.
+            val freshClasses = mutableListOf<IrClass>()
+            val collector = object : IrVisitorVoid() {
+                override fun visitElement(element: IrElement) = element.acceptChildrenVoid(this)
+                override fun visitClass(declaration: IrClass) {
+                    if (declaration.requiresRtti()) freshClasses.add(declaration)
+                    super.visitClass(declaration)
+                }
+            }
+            module.acceptVoid(collector)
+
+            fun freshRecordFor(irClass: IrClass): SerializedClassHierarchy {
+                val implementedInterfaces = irClass.implementedInterfaces.filter { it.requiresRtti() }
+                val superName = if (irClass.isInterface || irClass.isAny()) ""
+                else typeInfoSymbolName(context, irClass.getSuperClassNotAny() ?: context.irBuiltIns.anyClass.owner)
+                return SerializedClassHierarchy(
+                        typeInfoSymbolName = typeInfoSymbolName(context, irClass),
+                        isInterface = irClass.isInterface,
+                        hasInterfaceTable = !irClass.isInterface && !irClass.isAbstract() && !irClass.isObjCClass(),
+                        superTypeInfoSymbolName = superName,
+                        interfaceNames = implementedInterfaces.map { typeInfoSymbolName(context, it) }.toTypedArray(),
+                        interfaceVTableSizes = implementedInterfaces.map { context.getLayoutBuilder(it).interfaceVTableEntries.size }.toIntArray(),
+                )
+            }
+            val freshRecords = freshClasses.map { freshRecordFor(it) }
+
+            // Cached records: the hierarchy summaries every consumed cache serialized (no IR deserialization).
+            val cachedRecords = context.config.librariesWithDependencies()
+                    .filter { context.config.cachedLibraries.isLibraryCached(it) }
+                    .flatMap { library ->
+                        context.config.cachedLibraries.getLibraryCache(library, allowIncomplete = true)
+                                ?.serializedClassHierarchy.orEmpty()
+                                .onEach { it.cacheLibraryName = library.uniqueName }
+                    }
+
+            // Merge by name (a class belongs to exactly one unit; fresh wins on the off chance of a duplicate).
+            val merged = LinkedHashMap<String, SerializedClassHierarchy>()
+            cachedRecords.forEach { merged[it.typeInfoSymbolName] = it }
+            freshRecords.forEach { merged[it.typeInfoSymbolName] = it }
+            val allRecords = merged.values.toList()
+
+            System.err.println("IFACEDBG numbering cached=${cachedRecords.size} fresh=${freshRecords.size} all=${allRecords.size}")
+            val rootName = typeInfoSymbolName(context, context.irBuiltIns.anyClass.owner)
+            val numbering = computeLinkSetHierarchyNumbering(allRecords, rootName)
+
+            // Deliver the numbering to fresh classes via hierarchyInfo (RTTIGenerator reads it as usual).
+            for (irClass in freshClasses) {
+                val name = typeInfoSymbolName(context, irClass)
+                val info = if (irClass.isInterface) {
+                    ClassGlobalHierarchyInfo(0, 0, numbering.interfaceIds[name] ?: 0)
+                } else {
+                    val [lo, hi] = numbering.classIntervals[name] ?: (0 to 0)
+                    ClassGlobalHierarchyInfo(lo, hi, 0)
+                }
+                context.getLayoutBuilder(irClass).hierarchyInfo = info
+            }
+
+            context.globalHierarchyAnalysisResult = GlobalHierarchyAnalysisResult(numbering.bitsPerColor)
+            context.linkSetInterfaceIds = numbering.interfaceIds
+            context.linkSetClassIntervals = numbering.classIntervals
+            context.cachedHierarchyRecords = cachedRecords
+            context.allHierarchyRecords = allRecords
+            context.classHierarchyNumberingComputed = true
+            context.lateInterfaceScheme = true
         }
 )
 

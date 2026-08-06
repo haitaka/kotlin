@@ -83,6 +83,15 @@ struct InterfaceTableRecord {
     VTableElement const* vtable;
 };
 
+// Per-class hierarchy interval [classIdLo, classIdHi] used by the fast subclass check
+// (obj.classId in [dstLo, dstHi]). Stored in a separate, link-provided global rather than inline in
+// TypeInfo, so the whole-program numbering can be supplied at final link even for classes whose
+// TypeInfo is frozen inside a compilation cache. See ClassLayoutBuilder and RTTIGenerator.
+struct ClassHierarchyIds {
+    ClassId classIdLo;
+    ClassId classIdHi;
+};
+
 // This struct represents runtime type information and by itself is the compile time
 // constant.
 // When adding a field here do not forget to adjust:
@@ -122,7 +131,14 @@ struct TypeInfo {
     int32_t flags_;
 
     // Class id built with the whole class hierarchy taken into account. The details are in ClassLayoutBuilder.
+    // For interfaces this is the interface id; for classes it is the DFS-interval lower bound (also
+    // available, together with the upper bound, via the link-provided classHierarchyIds_ below).
     ClassId classId_;
+
+    // Points to a link-provided global holding this class's [classIdLo, classIdHi] interval. Kept out of
+    // the const TypeInfo body so the whole-program numbering can be supplied at final link (cached classes
+    // included). Used by the fast class subtype check. The details are in ClassLayoutBuilder.
+    const ClassHierarchyIds* classHierarchyIds_;
 
 #if KONAN_TYPE_INFO_HAS_WRITABLE_PART
     WritableTypeInfo* writableInfo_;

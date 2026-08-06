@@ -37,8 +37,11 @@ KBoolean IsSubtype(const TypeInfo* obj_type_info, const TypeInfo* type_info) {
 }
 
 KBoolean IsSubclassFast(const TypeInfo* obj_type_info, int32_t lo, int32_t hi) {
-  // Super type's interval should contain our interval.
-  return obj_type_info->classId_ >= lo && obj_type_info->classId_ <= hi;
+  // The object's own class id lives in a separate, link-provided global (classHierarchyIds_), not in the
+  // const TypeInfo body, so that the whole-program numbering can be supplied at final link (see the
+  // backend's per-class ClassHierarchyIds globals). The destination interval [lo, hi] is passed in.
+  ClassId classId = obj_type_info->classHierarchyIds_->classIdLo;
+  return classId >= lo && classId <= hi;
 }
 
 KBoolean IsArray(KConstRef obj) {

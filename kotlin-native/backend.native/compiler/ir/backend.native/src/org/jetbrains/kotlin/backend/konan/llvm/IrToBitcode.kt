@@ -358,6 +358,8 @@ internal class CodeGeneratorVisitor(
             codegen.objCDataGenerator?.finishModule()
 
             overrideRuntimeGlobals()
+            emitClassHierarchyIdsOverrides()
+            emitInterfaceTablesAndIds()
             appendLlvmUsed("llvm.used", llvm.usedFunctions.map { it.toConstPointer().llvm } + llvm.usedGlobals)
             appendLlvmUsed("llvm.compiler.used", llvm.compilerUsedGlobals)
             if (context.config.produceCInterface) {
@@ -2635,6 +2637,92 @@ internal class CodeGeneratorVisitor(
     // Globals set this way cannot be const, but are overridable when producing final executable.
     private fun overrideRuntimeGlobal(name: String, value: ConstValue) =
             codegen.replaceExternalWeakOrCommonGlobalFromNativeRuntime(name, value)
+
+    /**
+     * The final link owns the whole-program class numbering (computed by GHAPhase or, for static caches,
+     * GlobalHierarchyNumberingPhase over all modules). Fresh classes already got a strong ClassHierarchyIds
+     * global from RTTIGenerator; cached classes only have the overridable (common, zero) default emitted by
+     * their cache, so re-emit those here with strong linkage and the real interval. No TypeInfo symbols are
+     * referenced — only per-class id globals are defined — so this never produces undefined-symbol errors.
+     */
+    /**
+     * Strong `kclassids` for cached classes, by name from the metadata-driven numbering (fresh classes get theirs
+     * from RTTIGenerator via hierarchyInfo). Overrides each cache's weak-zero default across the object boundary.
+     */
+    private fun emitClassHierarchyIdsOverrides() {
+        if (!context.classHierarchyNumberingComputed) return
+        context.cachedHierarchyRecords.forEach { record ->
+            if (record.isInterface) return@forEach
+            val interval = context.linkSetClassIntervals[record.typeInfoSymbolName] ?: return@forEach
+            codegen.defineClassHierarchyIdsByName(record.typeInfoSymbolName, interval.first, interval.second)
+        }
+    }
+
+    /**
+     * Interface fast path under caches: the final link owns the whole-program interface coloring, so it emits the
+     * itable mask, the strong `kifaceid` for cached interfaces (fresh ones came from RTTIGenerator), and the
+     * per-class `kitable` record arrays. `kifaceid` is emitted for all cached interfaces (a check `x is I`
+     * references it even when no instance exists here); `kitable` is emitted only for fresh classes and cached
+     * classes whose cache file is actually linked into this binary. A class's `kitable` is referenced solely
+     * through its own (instantiated) TypeInfo, so restricting to linked classes keeps every referenced
+     * `kifacevtable` array present — allowing plain strong references — and avoids emitting tables (and keeping
+     * them alive) for the ~all cached classes that are never linked.
+     */
+    private fun emitInterfaceTablesAndIds() {
+        System.err.println("IFACEDBG emitInterfaceTablesAndIds produce=${context.config.produce} lateInterfaceScheme=${context.lateInterfaceScheme} allRecords=${context.allHierarchyRecords.size} cached=${context.cachedHierarchyRecords.size}")
+        if (!context.lateInterfaceScheme) return
+        val size = 1 shl context.globalHierarchyAnalysisResult.bitsPerColor
+        val mask = size - 1
+        codegen.defineInterfaceTableMask(mask)
+
+        context.cachedHierarchyRecords.forEach { record ->
+            if (!record.isInterface) return@forEach
+            val id = context.linkSetInterfaceIds[record.typeInfoSymbolName] ?: return@forEach
+            codegen.defineInterfaceIdByName(record.typeInfoSymbolName, id)
+        }
+
+        // How each cached library is linked, mirroring resolveCacheBinaries: only a per-file cache referenced as
+        // CertainFiles links exactly those files (so a class's file is definitely present iff it is in the set);
+        // anything else — a monolithic/whole-archive cache, or a WholeModule dependency — links the whole archive,
+        // and the linker then pulls objects by archive semantics, a superset of the tracked files. So for a
+        // whole-archive library we must emit a `kitable` for every one of its classes (any could be pulled), and,
+        // since a given object may not actually be pulled, reference its `kifacevtable` through a weak fallback.
+        val wholeArchiveLibraries = hashSetOf<String>()
+        val certainLinkedFiles = hashSetOf<Pair<String, String>>()
+        generationState.dependenciesTracker.allCachedBitcodeDependencies.forEach { dependency ->
+            val libraryName = dependency.library.uniqueName
+            val cache = context.config.cachedLibraries.getLibraryCache(dependency.library)
+            val kind = dependency.kind
+            if (kind is DependenciesTracker.DependencyKind.CertainFiles && cache is CachedLibraries.Cache.PerFile)
+                kind.files.forEach { certainLinkedFiles += libraryName to it.name }
+            else
+                wholeArchiveLibraries += libraryName
+        }
+
+        val recordType = llvm.runtime.interfaceTableRecordType
+        val emptyRecord: ConstValue = Struct(recordType, llvm.constInt32(0), llvm.constInt32(0), llvm.nullPointer)
+        context.allHierarchyRecords.forEach { classRecord ->
+            if (classRecord.isInterface || !classRecord.hasInterfaceTable) return@forEach
+            val libraryName = classRecord.cacheLibraryName
+            // Determine whether this class is linked, and whether its vtable arrays need a weak fallback.
+            val weakVtable: Boolean
+            when {
+                libraryName == null -> weakVtable = false // fresh class, defined in this module
+                libraryName in wholeArchiveLibraries -> weakVtable = true // may or may not be pulled from the archive
+                classRecord.cacheFileId != null && (libraryName to classRecord.cacheFileId!!) in certainLinkedFiles -> weakVtable = false // file definitely linked
+                else -> return@forEach // per-file cache, this file is not linked
+            }
+            val slots = Array<ConstValue>(size) { emptyRecord }
+            for (i in classRecord.interfaceNames.indices) {
+                val interfaceName = classRecord.interfaceNames[i]
+                val id = context.linkSetInterfaceIds[interfaceName] ?: continue
+                val vtableSize = classRecord.interfaceVTableSizes[i]
+                val vtablePtr = with(codegen) { interfaceVTableGlobalRefByName(classRecord.typeInfoSymbolName, interfaceName, weak = weakVtable) }
+                slots[id and mask] = Struct(recordType, llvm.constInt32(id), llvm.constInt32(vtableSize), vtablePtr)
+            }
+            codegen.defineInterfaceTableByName(classRecord.typeInfoSymbolName, slots.toList())
+        }
+    }
 
     private fun overrideRuntimeGlobals() {
         if (!context.config.isFinalBinary)

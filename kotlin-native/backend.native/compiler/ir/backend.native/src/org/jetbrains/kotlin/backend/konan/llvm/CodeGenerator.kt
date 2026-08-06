@@ -204,13 +204,13 @@ private inline fun <T : FunctionGenerationContext> generateFunctionBody(
 }
 
 internal object VirtualTablesLookup {
-    private fun FunctionGenerationContext.getInterfaceTableRecord(typeInfo: LLVMValueRef, interfaceId: Int): LLVMValueRef {
+    private fun FunctionGenerationContext.getInterfaceTableRecord(typeInfo: LLVMValueRef, interfaceId: LLVMValueRef): LLVMValueRef {
         val interfaceTableSize = load(llvm.int32Type, structGep(runtime.typeInfoType, typeInfo, 9 /* interfaceTableSize_ */))
         val interfaceTable = load(llvm.pointerType, structGep(runtime.typeInfoType, typeInfo, 10 /* interfaceTable_ */))
 
         fun fastPath(): LLVMValueRef {
             // The fastest optimistic version.
-            val interfaceTableIndex = and(interfaceTableSize, llvm.int32(interfaceId))
+            val interfaceTableIndex = and(interfaceTableSize, interfaceId)
             return gep(runtime.interfaceTableRecordType, interfaceTable, interfaceTableIndex)
         }
 
@@ -237,7 +237,7 @@ internal object VirtualTablesLookup {
             appendingTo(slowPathBB) {
                 val actualInterfaceTableSize = sub(llvm.kImmInt32Zero, interfaceTableSize) // -interfaceTableSize
                 val slowValue = call(llvm.lookupInterfaceTableRecord,
-                        listOf(interfaceTable, actualInterfaceTableSize, llvm.int32(interfaceId)))
+                        listOf(interfaceTable, actualInterfaceTableSize, interfaceId))
                 br(takeResBB)
                 addPhiIncoming(resultPhi, currentBlock to slowValue)
             }
@@ -245,19 +245,48 @@ internal object VirtualTablesLookup {
         }
     }
 
-    fun FunctionGenerationContext.checkIsSubtype(objTypeInfo: LLVMValueRef, dstClass: IrClass) = if (!context.ghaEnabled()) {
-        call(llvm.isSubtypeFunction, listOf(objTypeInfo, codegen.typeInfoValue(dstClass)))
-    } else {
-        val dstHierarchyInfo = context.getLayoutBuilder(dstClass).hierarchyInfo
+    /**
+     * Cache-style interface lookup: the object's itable (`kitable`, provided by the final-link numbering pass)
+     * is a uniform perfect hash keyed by the interface's whole-program color (`kifaceid`) and the single global
+     * mask, so there is no runtime fast/slow branch. Returns the record pointer and the loaded interface id.
+     */
+    private fun FunctionGenerationContext.cacheInterfaceTableRecord(
+            objTypeInfo: LLVMValueRef, dstInterface: IrClass
+    ): Pair<LLVMValueRef, LLVMValueRef> {
+        val id = load(llvm.int32Type, codegen.interfaceIdGlobal(dstInterface).pointer.llvm)
+        val mask = load(llvm.int32Type, codegen.interfaceTableMaskGlobal().pointer.llvm)
+        val table = load(llvm.pointerType, structGep(runtime.typeInfoType, objTypeInfo, 10 /* interfaceTable_ */))
+        val record = gep(runtime.interfaceTableRecordType, table, and(id, mask))
+        return record to id
+    }
+
+    fun FunctionGenerationContext.checkIsSubtype(objTypeInfo: LLVMValueRef, dstClass: IrClass): LLVMValueRef {
         if (!dstClass.isInterface) {
-            call(llvm.isSubclassFastFunction,
-                    listOf(objTypeInfo, llvm.int32(dstHierarchyInfo.classIdLo), llvm.int32(dstHierarchyInfo.classIdHi)))
-        } else {
-            // Essentially: typeInfo.itable[place(interfaceId)].id == interfaceId
-            val interfaceId = dstHierarchyInfo.interfaceId
-            val interfaceTableRecord = getInterfaceTableRecord(objTypeInfo, interfaceId)
-            icmpEq(load(llvm.int32Type, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 0 /* id */)), llvm.int32(interfaceId))
+            // Class check: obj.classId in [dstLo, dstHi]. The interval is read from the destination class's
+            // link-provided ClassHierarchyIds global; the object's own id is read (in IsSubclassFast) via a
+            // pointer in its TypeInfo. This works uniformly for monolithic and cache builds, because the
+            // final link supplies the whole-program numbering into those globals. Fall back to the generic
+            // runtime check only when no numbering was computed at all.
+            if (!context.classHierarchyNumberingComputed)
+                return call(llvm.isSubtypeFunction, listOf(objTypeInfo, codegen.typeInfoValue(dstClass)))
+            val dstIds = codegen.classHierarchyIdsGlobal(dstClass).pointer.llvm
+            val classIdLo = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, dstIds, 0 /* classIdLo */))
+            val classIdHi = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, dstIds, 1 /* classIdHi */))
+            return call(llvm.isSubclassFastFunction, listOf(objTypeInfo, classIdLo, classIdHi))
         }
+        // Interface check.
+        // Caches: probe the pass-provided uniform itable keyed by the interface's whole-program color; a
+        // straight-line perfect hash (no runtime branch), the same lookup interface calls use.
+        if (context.emitCacheStyleItables) {
+            val [record, id] = cacheInterfaceTableRecord(objTypeInfo, dstClass)
+            return icmpEq(load(llvm.int32Type, structGep(runtime.interfaceTableRecordType, record, 0 /* id */)), id)
+        }
+        // Monolithic: baked color itable with an immediate id. Otherwise fall back to the generic runtime check.
+        if (!context.ghaEnabled())
+            return call(llvm.isSubtypeFunction, listOf(objTypeInfo, codegen.typeInfoValue(dstClass)))
+        val interfaceId = llvm.int32(context.getLayoutBuilder(dstClass).classId)
+        val interfaceTableRecord = getInterfaceTableRecord(objTypeInfo, interfaceId)
+        return icmpEq(load(llvm.int32Type, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 0 /* id */)), interfaceId)
     }
 
     fun FunctionGenerationContext.getVirtualImpl(receiver: LLVMValueRef, irFunction: IrSimpleFunction): LlvmCallable {
@@ -286,7 +315,10 @@ internal object VirtualTablesLookup {
             else -> {
                 // Essentially: typeInfo.itable[place(interfaceId)].vtable[method]
                 val itablePlace = layoutBuilder.itablePlace(irFunction)
-                val interfaceTableRecord = getInterfaceTableRecord(typeInfoPtr, itablePlace.interfaceId)
+                val interfaceTableRecord = if (context.emitCacheStyleItables)
+                    cacheInterfaceTableRecord(typeInfoPtr, owner).first
+                else
+                    getInterfaceTableRecord(typeInfoPtr, llvm.int32(itablePlace.interfaceId))
                 val vtable = load(llvm.pointerType, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 2 /* vtable */))
                 val slot = gep(llvm.pointerType, vtable, llvm.int32(itablePlace.methodIndex))
                 load(llvm.pointerType, slot)

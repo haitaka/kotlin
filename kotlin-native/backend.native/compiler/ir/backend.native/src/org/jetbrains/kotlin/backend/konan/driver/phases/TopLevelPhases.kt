@@ -537,7 +537,16 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
         runAndMeasurePhase(CoroutinesVarSpillingPhase, it)
     }
     runAndMeasurePhase(CreateLLVMDeclarationsPhase, module)
-    runAndMeasurePhase(GHAPhase, module, disable = !runGlobalOptimizations || context.config.produce.isCache)
+    // GHA numbering is baked into the const TypeInfo, so it requires a whole-program view. It is
+    // correct for any monolithic build (regardless of optimizations), but not when producing a cache
+    // (partial view) or consuming static caches (cached classes' TypeInfos are frozen). The static
+    // cache case is handled separately by the late link-set numbering (see GlobalHierarchyNumbering).
+    runAndMeasurePhase(GHAPhase, module, disable = context.config.produce.isCache || context.config.cachedLibraries.hasStaticCaches)
+    // Static caches: number the whole link set (all deserialized modules). The intervals are delivered via
+    // per-class ClassHierarchyIds globals that the final link defines strongly (see emitClassHierarchyIdsOverrides).
+    // Mutually exclusive with GHAPhase above.
+    val lateHierarchyNumbering = context.config.cachedLibraries.hasStaticCaches && !context.config.produce.isCache
+    runAndMeasurePhase(GlobalHierarchyNumberingPhase, module, disable = !lateHierarchyNumbering)
     runAndMeasurePhase(RTTIPhase, RTTIInput(module, dceResult))
     val lifetimes = runAndMeasurePhase(EscapeAnalysisPhase, EscapeAnalysisInput(module, moduleDFG), disable = !runGlobalOptimizations)
     runAndMeasurePhase(CodegenPhase, CodegenInput(module, irBuiltIns, lifetimes))

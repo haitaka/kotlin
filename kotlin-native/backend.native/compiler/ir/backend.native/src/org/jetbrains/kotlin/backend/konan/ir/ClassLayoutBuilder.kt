@@ -104,8 +104,16 @@ internal class ClassGlobalHierarchyInfo(val classIdLo: Int, val classIdHi: Int, 
 
 internal class GlobalHierarchyAnalysisResult(val bitsPerColor: Int)
 
-internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrModuleFragment) {
-    fun run() {
+internal class GlobalHierarchyAnalysis(val context: Context, val irModules: List<IrModuleFragment>) {
+    /**
+     * [publishResult] controls whether [Context.globalHierarchyAnalysisResult] is set (i.e. whether
+     * [Context.ghaEnabled] becomes true). Monolithic builds publish it so the ids are baked into the const
+     * TypeInfo and interfaces use the GHA color scheme. The late link-set pass (static caches) must NOT
+     * publish it: interfaces have to keep the deterministic `localHash` ids that cached itables were built
+     * with, so only the per-class `hierarchyInfo` intervals are computed here and later delivered to the
+     * runtime-writable slot.
+     */
+    fun run(publishResult: Boolean = true) {
         /*
          * The algorithm for fast interface call and check:
          * Consider the following graph: the vertices are interfaces and two interfaces are
@@ -153,7 +161,7 @@ internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrMod
         val root = context.irBuiltIns.anyClass.owner
         val immediateInheritors = mutableMapOf<IrClass, MutableList<IrClass>>()
         val allClasses = mutableListOf<IrClass>()
-        irModule.acceptVoid(object: IrVisitorVoid() {
+        val visitor = object: IrVisitorVoid() {
             override fun visitElement(element: IrElement) {
                 element.acceptChildrenVoid(this)
             }
@@ -178,7 +186,8 @@ internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrMod
                 }
                 super.visitClass(declaration)
             }
-        })
+        }
+        irModules.forEach { it.acceptVoid(visitor) }
         var time = 0
 
         fun dfs(irClass: IrClass) {
@@ -192,7 +201,8 @@ internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrMod
 
         dfs(root)
 
-        context.globalHierarchyAnalysisResult = GlobalHierarchyAnalysisResult(bitsPerColor)
+        if (publishResult)
+            context.globalHierarchyAnalysisResult = GlobalHierarchyAnalysisResult(bitsPerColor)
     }
 
     class InterfacesForbiddennessGraph(val nodes: List<IrClass>, val forbidden: List<List<Int>>) {
@@ -221,11 +231,11 @@ internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrMod
         }
 
         companion object {
-            fun build(irModuleFragment: IrModuleFragment): InterfacesForbiddennessGraph {
+            fun build(irModules: List<IrModuleFragment>): InterfacesForbiddennessGraph {
                 val interfaceIndices = mutableMapOf<IrClass, Int>()
                 val interfaces = mutableListOf<IrClass>()
                 val forbidden = mutableListOf<MutableList<Int>>()
-                irModuleFragment.acceptVoid(object : IrVisitorVoid() {
+                val visitor = object : IrVisitorVoid() {
                     override fun visitElement(element: IrElement) {
                         element.acceptChildrenVoid(this)
                     }
@@ -254,14 +264,15 @@ internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrMod
                         }
                         super.visitClass(declaration)
                     }
-                })
+                }
+                irModules.forEach { it.acceptVoid(visitor) }
                 return InterfacesForbiddennessGraph(interfaces, forbidden)
             }
         }
     }
 
     private fun assignColorsToInterfaces(): Map<IrClass, Int> {
-        val graph = InterfacesForbiddennessGraph.build(irModule)
+        val graph = InterfacesForbiddennessGraph.build(irModules)
         val coloring = graph.computeColoringGreedy()
         return graph.nodes.mapIndexed { v, irClass -> irClass to coloring[v] }.toMap()
     }

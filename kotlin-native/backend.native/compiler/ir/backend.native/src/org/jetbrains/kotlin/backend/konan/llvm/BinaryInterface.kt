@@ -147,6 +147,17 @@ fun IrClass.computeTypeInfoSymbolName() = with(KonanBinaryInterface) { typeInfoS
 fun IrClass.computePrivateTypeInfoSymbolName(containerName: String) = with(KonanBinaryInterface) { privateTypeInfoSymbolName(containerName) }.replaceSpecialSymbols()
 
 /**
+ * The class/interface's TypeInfo symbol name (public when exported, else the file-qualified private name),
+ * computed from [context] alone (no codegen). This is the stable link-level identity all hierarchy globals key
+ * on (`kclassids:`, `kitable:`, `kifaceid:`, `kifacevtable:`); it must match [ContextUtils.typeInfoSymbolNameString].
+ */
+internal fun typeInfoSymbolName(context: Context, irClass: IrClass): String =
+        if (KonanBinaryInterface.isExported(irClass))
+            irClass.computeTypeInfoSymbolName()
+        else
+            irClass.computePrivateTypeInfoSymbolName(context.externalDeclarationFileNameProvider.getExternalDeclarationFileName(irClass))
+
+/**
  * Delegates to different naming strategies depending on whether the function is exported or not.
  *
  * When [forImplementation] is true, returns the symbol name under which the function's own body is emitted: for overridable methods

@@ -679,6 +679,7 @@ static const TypeInfo* createTypeInfo(
   }
 
   result->classId_ = superType->classId_;
+  result->classHierarchyIds_ = superType->classHierarchyIds_;
 
   std::vector<const TypeInfo*> implementedInterfaces(
     superType->implementedInterfaces_, superType->implementedInterfaces_ + superType->implementedInterfacesCount_

@@ -18,6 +18,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.runtime.RuntimeModulesConfig
 import org.jetbrains.kotlin.backend.konan.objcexport.ObjCExport
 import org.jetbrains.kotlin.backend.konan.serialization.CacheDeserializationStrategy
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassFields
+import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedEagerInitializedFile
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedInlineFunctionReference
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedTrivialGetter
@@ -70,6 +71,9 @@ internal class NativeGenerationState(
 
     val inlineFunctionBodies = mutableListOf<SerializedInlineFunctionReference>()
     val classFields = mutableListOf<SerializedClassFields>()
+    // Hierarchy summary of the classes/interfaces this cache actually materializes (collected during RTTI);
+    // serialized so a consuming build can number + build itables without deserializing this cache's IR.
+    val classHierarchyRecords = mutableListOf<SerializedClassHierarchy>()
     val eagerInitializedFiles = mutableListOf<SerializedEagerInitializedFile>()
     val trivialGetters = mutableListOf<SerializedTrivialGetter>()
     var coroutinesLivenessAnalysisPhasePerformed = false

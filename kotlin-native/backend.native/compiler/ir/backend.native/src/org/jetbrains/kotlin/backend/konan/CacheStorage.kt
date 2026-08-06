@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.backend.konan
 import org.jetbrains.kotlin.backend.konan.serialization.CacheMetadata
 import org.jetbrains.kotlin.backend.konan.serialization.CacheMetadataSerializer
 import org.jetbrains.kotlin.backend.konan.serialization.ClassFieldsSerializer
+import org.jetbrains.kotlin.backend.konan.serialization.ClassHierarchySerializer
 import org.jetbrains.kotlin.backend.konan.serialization.EagerInitializedPropertySerializer
 import org.jetbrains.kotlin.backend.konan.serialization.InlineFunctionBodyReferenceSerializer
 import org.jetbrains.kotlin.backend.konan.serialization.TrivialGettersSerializer
@@ -64,6 +65,7 @@ internal class CacheStorage(private val generationState: NativeGenerationState) 
         saveInlineFunctionBodies()
         saveCacheBitcodeDependencies()
         saveClassFields()
+        saveClassHierarchy()
         saveEagerInitializedProperties()
         saveTrivialGetters()
     }
@@ -87,6 +89,11 @@ internal class CacheStorage(private val generationState: NativeGenerationState) 
     private fun saveClassFields() {
         outputFiles.classFieldsFile!!.writeBytes(
                 ClassFieldsSerializer.serialize(generationState.classFields))
+    }
+
+    private fun saveClassHierarchy() {
+        outputFiles.classHierarchyFile!!.writeBytes(
+                ClassHierarchySerializer.serialize(generationState.classHierarchyRecords))
     }
 
     private fun saveEagerInitializedProperties() {

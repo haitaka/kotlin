@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.backend.konan.ir.isArray
 import org.jetbrains.kotlin.backend.konan.llvm.objcexport.WritableTypeInfoPointer
 import org.jetbrains.kotlin.backend.konan.llvm.objcexport.generateWritableTypeInfoForSyntheticInterface
 import org.jetbrains.kotlin.backend.konan.llvm.runtime.RuntimeModule
+import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
 import org.jetbrains.kotlin.backend.konan.lower.hasSyntheticNameToBeHiddenInReflection
 import org.jetbrains.kotlin.backend.konan.lower.getObjectClassInstanceFunction
 import org.jetbrains.kotlin.builtins.PrimitiveType
@@ -95,6 +96,7 @@ internal class RTTIGenerator(
             relativeName: String?,
             flags: Int,
             classId: Int,
+            classHierarchyIds: ConstPointer,
             writableTypeInfo: WritableTypeInfoPointer?,
             associatedObjects: ConstPointer?,
             processObjectInMark: ConstPointer?,
@@ -130,6 +132,8 @@ internal class RTTIGenerator(
                     llvm.constInt32(flags),
 
                     llvm.constInt32(classId),
+
+                    classHierarchyIds,
 
                     *listOfNotNull(writableTypeInfo).toTypedArray(),
 
@@ -217,6 +221,21 @@ internal class RTTIGenerator(
 
         val implementedInterfaces = irClass.implementedInterfaces.filter { it.requiresRtti() }
 
+        // When producing a cache, record this materialized class in the hierarchy summary so a consuming build
+        // can number the whole program and build itables from it, without deserializing this cache's IR.
+        if (context.config.produce.isCache) {
+            val superName = if (irClass.isInterface || irClass.isAny()) ""
+            else typeInfoSymbolNameString(irClass.getSuperClassNotAny() ?: context.irBuiltIns.anyClass.owner)
+            generationState.classHierarchyRecords.add(SerializedClassHierarchy(
+                    typeInfoSymbolName = typeInfoSymbolNameString(irClass),
+                    isInterface = irClass.isInterface,
+                    hasInterfaceTable = !irClass.isInterface && !irClass.isAbstract() && !irClass.isObjCClass(),
+                    superTypeInfoSymbolName = superName,
+                    interfaceNames = implementedInterfaces.map { typeInfoSymbolNameString(it) }.toTypedArray(),
+                    interfaceVTableSizes = implementedInterfaces.map { context.getLayoutBuilder(it).interfaceVTableEntries.size }.toIntArray(),
+            ))
+        }
+
         val interfaces = implementedInterfaces.map { it.typeInfoPtr }
         val interfacesPtr = staticData.placeGlobalConstArray("kintf:$className",
                 llvm.pointerType, interfaces)
@@ -232,16 +251,51 @@ internal class RTTIGenerator(
         }
 
         val needInterfaceTable = !irClass.isInterface && !irClass.isAbstract() && !irClass.isObjCClass()
-        val [interfaceTable, interfaceTableSize] = if (needInterfaceTable) {
-            interfaceTableRecords(irClass)
-        } else {
-            Pair(emptyList(), -1)
+        val interfaceTablePtr: ConstPointer
+        val interfaceTableSize: Int
+        run {
+            val fq = irClass.fqNameForIrSerialization.asString()
+            if (fq == "kotlin.Any" || fq == "kotlin.Int" || fq == "kotlin.Comparable")
+                System.err.println("IFACEDBG rtti class=$fq produce=${context.config.produce} emitCacheStyle=${context.emitCacheStyleItables} needIfaceTable=$needInterfaceTable ghaEnabled=${context.ghaEnabled()}")
         }
-        val interfaceTablePtr = staticData.placeGlobalConstArray("kifacetable:$className",
-                runtime.interfaceTableRecordType, interfaceTable)
+        if (context.emitCacheStyleItables) {
+            // Cache style: the per-class record array (`kitable:<C>`) is emitted by the final-link numbering
+            // pass; here we only emit the exported per-interface vtable arrays it points at, and reference the
+            // (pass-provided) `kitable`. The slot mask is a single global, so `interfaceTableSize_` is unused.
+            if (needInterfaceTable) {
+                emitExportedInterfaceVTables(irClass)
+                // A cache emits a weak-zero `kitable:<C>` default so the cache is self-contained regardless of how
+                // it is later consumed: a cache-style consumer overrides it with the correctly-numbered strong
+                // table, while a baked/global-optimizations consumer (which never emits itables) still links. The
+                // final link references it through `interfaceTable_`.
+                if (context.config.produce.isCache) defineWeakInterfaceTableDefault(irClass)
+                interfaceTablePtr = interfaceTableGlobalRef(irClass)
+            } else {
+                interfaceTablePtr = llvm.nullPointer
+            }
+            interfaceTableSize = 0
+            if (irClass.isInterface) defineInterfaceId(irClass)
+        } else {
+            val [table, size] = if (needInterfaceTable) {
+                interfaceTableRecords(irClass)
+            } else {
+                Pair(emptyList(), -1)
+            }
+            interfaceTablePtr = staticData.placeGlobalConstArray("kifacetable:$className",
+                    runtime.interfaceTableRecordType, table)
+            interfaceTableSize = size
+        }
 
         val reflectionInfo = getReflectionInfo(irClass)
         val typeInfoGlobal = llvmDeclarations.typeInfoGlobal
+        // The class interval lives in a separate global (interfaces don't need one). Each unit defines the
+        // global for its own classes: a cache emits an overridable weak zero, the final link a strong value.
+        val classHierarchyIds = if (irClass.isInterface) {
+            llvm.nullPointer
+        } else {
+            defineClassHierarchyIds(irClass)
+            classHierarchyIdsGlobal(irClass).pointer
+        }
         val typeInfo = TypeInfo(
                 irClass.typeInfoPtr,
                 makeExtendedInfo(irClass),
@@ -254,6 +308,7 @@ internal class RTTIGenerator(
                 reflectionInfo.relativeName,
                 flagsFromClass(irClass) or reflectionInfo.reflectionFlags,
                 context.getLayoutBuilder(irClass).classId,
+                classHierarchyIds,
                 llvmDeclarations.writableTypeInfoGlobal,
                 associatedObjects = genAssociatedObjects(irClass),
                 processObjectInMark = when {
@@ -376,6 +431,29 @@ internal class RTTIGenerator(
                         )
                     }
             )
+        }
+    }
+
+    /**
+     * Cache-style itables: emit this class's per-interface vtable arrays as exported, stably-named globals
+     * (`kifacevtable:<C>@<I>`), so the final-link numbering pass can reference them from the `kitable:<C>` it
+     * builds with the whole-program interface colors. The method impls inside stay hidden.
+     */
+    private fun emitExportedInterfaceVTables(irClass: IrClass) {
+        val layoutBuilder = context.getLayoutBuilder(irClass)
+        for (iface in irClass.implementedInterfaces.filter { it.requiresRtti() }) {
+            val name = interfaceVTableSymbolName(irClass, iface)
+            if (staticData.getGlobal(name) != null) continue
+            val vtableEntries = context.getLayoutBuilder(iface).interfaceVTableEntries.map { ifaceFunction ->
+                val impl = layoutBuilder.overridingOf(ifaceFunction)
+                if (impl == null || referencedFunctions?.contains(impl) == false)
+                    llvm.nullPointer
+                else impl.entryPointAddress
+            }
+            val global = staticData.placeGlobalArray(name, llvm.pointerType, vtableEntries, isExported = true)
+            global.setConstant(true)
+            LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+            llvm.usedGlobals += global.llvmGlobal
         }
     }
 
@@ -548,6 +626,16 @@ internal class RTTIGenerator(
         }
         val interfaceTablePtr = staticData.placeGlobalConstArray("", runtime.interfaceTableRecordType, interfaceTable)
 
+        // Synthetic classes are numbered locally (not part of GHA); emit their interval global directly,
+        // keeping default visibility and preserving it like defineClassHierarchyIds does.
+        val classHierarchyIds = classHierarchyIdsGlobal(irClass).apply {
+            setLinkage(LLVMLinkage.LLVMExternalLinkage)
+            setInitializer(Struct(runtime.classHierarchyIdsType, llvm.constInt32(typeHierarchyInfo.classIdLo), llvm.constInt32(typeHierarchyInfo.classIdHi)))
+            setConstant(true)
+            LLVMSetVisibility(llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+            llvm.usedGlobals += llvmGlobal
+        }.pointer
+
         val typeInfoWithVtable = llvm.struct(TypeInfo(
                 selfPtr = result,
                 extendedInfo = llvm.nullPointer,
@@ -560,6 +648,7 @@ internal class RTTIGenerator(
                 relativeName = ReflectionInfo.EMPTY.relativeName,
                 flags = flagsFromClass(irClass) or (if (immutable) TF_IMMUTABLE else 0),
                 classId = typeHierarchyInfo.classIdLo,
+                classHierarchyIds = classHierarchyIds,
                 writableTypeInfo = writableTypeInfo,
                 associatedObjects = null,
                 processObjectInMark = genProcessObjectInMark(bodyType),

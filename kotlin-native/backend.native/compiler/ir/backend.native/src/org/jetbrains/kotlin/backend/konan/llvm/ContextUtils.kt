@@ -222,6 +222,189 @@ internal interface ContextUtils : RuntimeAware {
         }
 
     /**
+     * Symbol name of the per-class [ClassHierarchyIds] global holding this class's [classIdLo, classIdHi].
+     * Derived from the TypeInfo symbol name so it is identical whether computed by the class's owning unit
+     * or by the final link, which lets the final link's strong definition override a cache's weak default.
+     */
+    fun classHierarchyIdsSymbolName(irClass: IrClass): String {
+        val typeInfoName = if (KonanBinaryInterface.isExported(irClass))
+            irClass.computeTypeInfoSymbolName()
+        else
+            irClass.computePrivateTypeInfoSymbolName(context.externalDeclarationFileNameProvider.getExternalDeclarationFileName(irClass))
+        return "kclassids:$typeInfoName"
+    }
+
+    /** Get-or-create the (possibly still external) hierarchy-ids global for [irClass]. */
+    fun classHierarchyIdsGlobal(irClass: IrClass): StaticData.Global {
+        val name = classHierarchyIdsSymbolName(irClass)
+        return staticData.getGlobal(name) ?: staticData.createGlobal(runtime.classHierarchyIdsType, name, isExported = true)
+    }
+
+    /**
+     * Emit the definition of [irClass]'s hierarchy-ids global. When the whole-program numbering is known
+     * (monolithic build, or the final link consuming caches) it is a strong definition with the real
+     * interval; when producing a cache the numbering is unknown, so an overridable weak zero default is
+     * emitted for the final link to replace (and un-numbered cached classes safely keep the zero, since they
+     * are unused). Default visibility + preservation from the internalize/hiding pass let a cached class's
+     * frozen TypeInfo (in another object file) bind to, and the final link override, this global.
+     */
+    fun defineClassHierarchyIds(irClass: IrClass) {
+        val global = classHierarchyIdsGlobal(irClass)
+        if (context.classHierarchyNumberingComputed) {
+            val info = context.getLayoutBuilder(irClass).hierarchyInfo
+            global.setLinkage(LLVMLinkage.LLVMExternalLinkage)
+            global.setInitializer(Struct(runtime.classHierarchyIdsType, llvm.constInt32(info.classIdLo), llvm.constInt32(info.classIdHi)))
+        } else {
+            global.setLinkage(LLVMLinkage.LLVMWeakAnyLinkage)
+            global.setZeroInitializer()
+        }
+        LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+
+    /** The class/interface's TypeInfo symbol name (public when exported, else the file-qualified private name). */
+    fun typeInfoSymbolNameString(irClass: IrClass): String =
+            if (KonanBinaryInterface.isExported(irClass))
+                irClass.computeTypeInfoSymbolName()
+            else
+                irClass.computePrivateTypeInfoSymbolName(context.externalDeclarationFileNameProvider.getExternalDeclarationFileName(irClass))
+
+    // --- Interface fast-check globals (delivered by the final-link numbering pass, imported by caches) ---
+
+    /** Global holding an interface's whole-program id (color). Weak-0 in the owner, strong from the final pass. */
+    fun interfaceIdSymbolName(irClass: IrClass): String = "kifaceid:${typeInfoSymbolNameString(irClass)}"
+
+    fun interfaceIdGlobal(irClass: IrClass): StaticData.Global {
+        val name = interfaceIdSymbolName(irClass)
+        return staticData.getGlobal(name) ?: staticData.createGlobal(llvm.int32Type, name, isExported = true)
+    }
+
+    fun defineInterfaceId(irClass: IrClass) {
+        val global = interfaceIdGlobal(irClass)
+        if (context.classHierarchyNumberingComputed) {
+            global.setLinkage(LLVMLinkage.LLVMExternalLinkage)
+            global.setInitializer(llvm.constInt32(context.getLayoutBuilder(irClass).hierarchyInfo.interfaceId))
+        } else {
+            global.setLinkage(LLVMLinkage.LLVMWeakAnyLinkage)
+            global.setZeroInitializer()
+        }
+        LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+
+    /** Symbol of the per-class itable (record array), emitted by the final pass, imported by caches. */
+    fun interfaceTableSymbolName(irClass: IrClass): String = "kitable:${typeInfoSymbolNameString(irClass)}"
+
+    /** Symbol of a class's per-interface vtable array (method pointers); emitted + exported by the owning unit. */
+    fun interfaceVTableSymbolName(irClass: IrClass, iface: IrClass): String =
+            "kifacevtable:${typeInfoSymbolNameString(irClass)}@${typeInfoSymbolNameString(iface)}"
+
+    /**
+     * Pointer to the per-class itable (`kitable:<C>`), for `TypeInfo.interfaceTable_`. In a consuming build the
+     * numbering pass has already created it (as a sized record array) before RTTI, so this returns that global;
+     * in a cache build it is an external declaration the consuming pass will define.
+     */
+    /**
+     * Uniform itable type: an array of `2^bitsPerColor` records once the numbering is published; otherwise (a
+     * cache build, no numbering yet) the element type, used only for an external declaration the consumer sizes.
+     */
+    fun interfaceTableType(): LLVMTypeRef =
+            if (context.ghaEnabled())
+                LLVMArrayType(runtime.interfaceTableRecordType, 1 shl context.globalHierarchyAnalysisResult.bitsPerColor)!!
+            else
+                runtime.interfaceTableRecordType
+
+    fun interfaceTableGlobal(irClass: IrClass): StaticData.Global {
+        val name = interfaceTableSymbolName(irClass)
+        return staticData.getGlobal(name) ?: staticData.createGlobal(interfaceTableType(), name, isExported = true)
+    }
+
+    fun interfaceTableGlobalRef(irClass: IrClass): ConstPointer = interfaceTableGlobal(irClass).pointer
+
+    /**
+     * Cache build: emit an overridable weak-zero `kitable:<C>` so a cache-style cache is self-contained — its
+     * frozen TypeInfo's `interfaceTable_` reference resolves even for a consumer that does not itself emit the
+     * itable (e.g. a build consuming the cache through the baked/global-optimizations path, where the whole-program
+     * numbering pass never runs). A cache-style consumer overrides this with the correctly-numbered strong table.
+     * This keeps the itable style from becoming a hard cross-unit link dependency across consumption modes.
+     */
+    fun defineWeakInterfaceTableDefault(irClass: IrClass) {
+        val global = interfaceTableGlobal(irClass)
+        global.setLinkage(LLVMLinkage.LLVMWeakAnyLinkage)
+        global.setZeroInitializer()
+        LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+
+    /** The single global itable mask (`2^bitsPerColor - 1`), defined by the numbering pass, imported by caches. */
+    fun interfaceTableMaskGlobal(): StaticData.Global {
+        val name = "Kotlin_interfaceTableMask"
+        return staticData.getGlobal(name) ?: staticData.createGlobal(llvm.int32Type, name, isExported = true)
+    }
+
+    fun defineInterfaceTableMask(mask: Int) {
+        val global = interfaceTableMaskGlobal()
+        global.setLinkage(LLVMLinkage.LLVMExternalLinkage)
+        global.setInitializer(llvm.constInt32(mask))
+        LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+
+    // --- By-name variants for cached classes: the consuming link has no IrClass for them, only the metadata
+    //     summary keyed by TypeInfo symbol name, so their globals are defined directly from the string name.
+    //     [typeInfoName] is a class's TypeInfo symbol name (the same one the IrClass-based helpers derive). ---
+
+    private fun getOrCreateGlobalByName(symbol: String, type: LLVMTypeRef): StaticData.Global =
+            staticData.getGlobal(symbol) ?: staticData.createGlobal(type, symbol, isExported = true)
+
+    fun defineClassHierarchyIdsByName(typeInfoName: String, classIdLo: Int, classIdHi: Int) {
+        val global = getOrCreateGlobalByName("kclassids:$typeInfoName", runtime.classHierarchyIdsType)
+        global.setLinkage(LLVMLinkage.LLVMExternalLinkage)
+        global.setInitializer(Struct(runtime.classHierarchyIdsType, llvm.constInt32(classIdLo), llvm.constInt32(classIdHi)))
+        LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+
+    fun defineInterfaceIdByName(typeInfoName: String, interfaceId: Int) {
+        val global = getOrCreateGlobalByName("kifaceid:$typeInfoName", llvm.int32Type)
+        global.setLinkage(LLVMLinkage.LLVMExternalLinkage)
+        global.setInitializer(llvm.constInt32(interfaceId))
+        LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+
+    /**
+     * Reference to a class's per-interface vtable array, exported by its owning unit. If it is already defined in
+     * this module (a fresh class, via RTTIGenerator), the ref binds to it directly. Otherwise the array lives in a
+     * cache object: when the owning file is known to be linked (a per-file cache dependency) [weak] is false and a
+     * plain strong reference is emitted; when the class comes from a whole-archive cache — where the linker pulls
+     * objects by archive semantics, so the object may or may not be present — [weak] is true and an overridable
+     * weak-zero default is emitted (kept via llvm.used at default visibility, so the owning object's strong
+     * definition overrides it when linked, else the zero satisfies the reference for a class with no instance).
+     */
+    fun interfaceVTableGlobalRefByName(classTypeInfoName: String, interfaceTypeInfoName: String, weak: Boolean): ConstPointer {
+        val symbol = "kifacevtable:$classTypeInfoName@$interfaceTypeInfoName"
+        staticData.getGlobal(symbol)?.let { return it.pointer }
+        val global = staticData.createGlobal(llvm.pointerType, symbol, isExported = true)
+        if (weak) {
+            global.setLinkage(LLVMLinkage.LLVMWeakAnyLinkage)
+            global.setZeroInitializer()
+            LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+            llvm.usedGlobals += global.llvmGlobal
+        }
+        return global.pointer
+    }
+
+    fun defineInterfaceTableByName(typeInfoName: String, records: List<ConstValue>) {
+        val global = getOrCreateGlobalByName("kitable:$typeInfoName", interfaceTableType())
+        global.setLinkage(LLVMLinkage.LLVMExternalLinkage)
+        global.setInitializer(ConstArray(runtime.interfaceTableRecordType, records))
+        global.setConstant(true)
+        LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMDefaultVisibility)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+
+    /**
      * Pointer to type info for given class.
      * It may be declared as pointer to external variable.
      */
