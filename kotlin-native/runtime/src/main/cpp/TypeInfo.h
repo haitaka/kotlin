@@ -83,6 +83,11 @@ struct InterfaceTableRecord {
     VTableElement const* vtable;
 };
 
+struct ClassHierarchyIds {
+    int32_t low_;
+    int32_t high_;
+};
+
 // This struct represents runtime type information and by itself is the compile time
 // constant.
 // When adding a field here do not forget to adjust:
@@ -123,6 +128,7 @@ struct TypeInfo {
 
     // Class id built with the whole class hierarchy taken into account. The details are in ClassLayoutBuilder.
     ClassId classId_;
+    ClassHierarchyIds* classHierarchyIds_;
 
 #if KONAN_TYPE_INFO_HAS_WRITABLE_PART
     WritableTypeInfo* writableInfo_;

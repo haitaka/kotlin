@@ -18,6 +18,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.runtime.RuntimeModulesConfig
 import org.jetbrains.kotlin.backend.konan.objcexport.ObjCExport
 import org.jetbrains.kotlin.backend.konan.serialization.CacheDeserializationStrategy
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassFields
+import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedEagerInitializedFile
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedInlineFunctionReference
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedTrivialGetter
@@ -72,6 +73,7 @@ internal class NativeGenerationState(
     val classFields = mutableListOf<SerializedClassFields>()
     val eagerInitializedFiles = mutableListOf<SerializedEagerInitializedFile>()
     val trivialGetters = mutableListOf<SerializedTrivialGetter>()
+    val classHierarchy = mutableListOf<SerializedClassHierarchy>()
     var coroutinesLivenessAnalysisPhasePerformed = false
 
     lateinit var fileLowerState: FileLowerState

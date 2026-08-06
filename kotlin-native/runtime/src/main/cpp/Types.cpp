@@ -41,6 +41,12 @@ KBoolean IsSubclassFast(const TypeInfo* obj_type_info, int32_t lo, int32_t hi) {
   return obj_type_info->classId_ >= lo && obj_type_info->classId_ <= hi;
 }
 
+KBoolean IsSubclassFastNew(const TypeInfo* obj_type_info, int32_t lo, int32_t hi) {
+  // Super type's interval should contain our interval.
+    // TODO
+  return obj_type_info->classHierarchyIds_->low_ >= lo && obj_type_info->classHierarchyIds_->low_ <= hi;
+}
+
 KBoolean IsArray(KConstRef obj) {
   RuntimeAssert(obj != nullptr, "Object must not be null");
   return obj->type_info()->instanceSize_ < 0;

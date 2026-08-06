@@ -214,5 +214,5 @@ internal fun runLinkerCommands(context: NativeBackendPhaseContext, commands: Lis
 
     val extraInfo = listOfNotNull(extraUserInfo, extraUserSetupInfo).joinToString(separator = "\n")
 
-    context.reportCompilationError("${e.toolName} invocation reported errors\n$extraInfo\n${e.message}")
+    context.reportCompilationError("${e.toolName} invocation reported errors\n$extraInfo\n${e.message}\n${commands.map {it.command}}")
 }

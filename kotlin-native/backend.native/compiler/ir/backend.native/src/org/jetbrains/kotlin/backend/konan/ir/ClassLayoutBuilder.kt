@@ -5,6 +5,7 @@
 
 package org.jetbrains.kotlin.backend.konan.ir
 
+import GlobalHierarchyUtils
 import llvm.LLVMABIAlignmentOfType
 import llvm.LLVMABISizeOfType
 import llvm.LLVMStoreSizeOfType
@@ -17,6 +18,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.localHash
 import org.jetbrains.kotlin.backend.konan.llvm.toLLVMType
 import org.jetbrains.kotlin.backend.konan.lower.bridgeTarget
 import org.jetbrains.kotlin.backend.konan.serialization.ClassFieldsDeserializer
+import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
 import org.jetbrains.kotlin.descriptors.Modality
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.*
@@ -264,6 +266,89 @@ internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrMod
         val graph = InterfacesForbiddennessGraph.build(irModule)
         val coloring = graph.computeColoringGreedy()
         return graph.nodes.mapIndexed { v, irClass -> irClass to coloring[v] }.toMap()
+    }
+}
+
+internal data class NewClassGHAInfo(val classIdLo: Int, val classIdHi: Int)
+
+internal data class NewGHAResult(val data: Map<String, NewClassGHAInfo>)
+
+internal class NewGHA(override val generationState: NativeGenerationState, val irModule: IrModuleFragment) : GlobalHierarchyUtils {
+    fun run() {
+        val serializedHierarchy: List<SerializedClassHierarchy> = context.config.librariesWithDependencies()
+                .filter { context.config.cachedLibraries.isLibraryCached(it) }
+                .mapNotNull { library ->
+                    context.config.cachedLibraries.getLibraryCache(library, allowIncomplete = true)
+                }.flatMap {
+                    it.serializedClassHierarchy
+                }
+
+        val root = context.irBuiltIns.anyClass.owner
+        val immediateInheritors = mutableMapOf<String, MutableList<String>>()
+        val allClasses = mutableListOf<IrClass>()
+        val allClassNames = mutableListOf<String>()
+        val superClasses = mutableMapOf<String, String>()
+        irModule.acceptVoid(object : IrVisitorVoid() {
+            override fun visitElement(element: IrElement) {
+                element.acceptChildrenVoid(this)
+            }
+
+            override fun visitClass(declaration: IrClass) {
+                if (declaration.isInterface) {
+                    // TODO handle interface coloring
+                } else {
+                    allClasses += declaration
+                    allClassNames += declaration.stableName
+                    if (declaration != root) {
+                        val superClass = declaration.getSuperClassNotAny() ?: root
+                        superClasses[declaration.stableName] = superClass.stableName
+                        val inheritors = immediateInheritors.getOrPut(superClass.stableName ) { mutableListOf() }
+                        inheritors.add(declaration.stableName)
+                    }
+                }
+                super.visitClass(declaration)
+            }
+        })
+
+        for ([className, superName] in serializedHierarchy) {
+            println("DESER HIER: $className <: $superName")
+            allClassNames += className
+            allClassNames += superName
+            superClasses[className] = superName
+            immediateInheritors.getOrPut(superName) { mutableListOf() }.add(className)
+
+        }
+        for (className in allClassNames) {
+            if (className !in superClasses && className != root.stableName) {
+                println("ANYDESC $className")
+                superClasses[className] = root.stableName
+                immediateInheritors.getOrPut(root.stableName ) { mutableListOf() }.add(className)
+            } else {
+                println("DESC $className <: ${superClasses[className]}")
+            }
+        }
+
+        for ([className, subClasses] in immediateInheritors) {
+            println("HIER: $subClasses <: $className")
+        }
+
+        val rootName = root.stableName
+
+        val classHierarchyIds = mutableMapOf<String, NewClassGHAInfo>()
+        var time = 0
+        fun dfs(irClass: String) {
+            println("dfs($irClass)")
+            ++time
+            // Make the Any's interval's left border -1 in order to correctly generate classes for ObjC blocks.
+            val enterTime = if (irClass == rootName) -1 else time
+            immediateInheritors[irClass]?.forEach { dfs(it) }
+            val exitTime = time
+            classHierarchyIds[irClass] = NewClassGHAInfo(enterTime, exitTime)
+        }
+
+        dfs(rootName)
+
+        context.newGHAResult = NewGHAResult(classHierarchyIds)
     }
 }
 

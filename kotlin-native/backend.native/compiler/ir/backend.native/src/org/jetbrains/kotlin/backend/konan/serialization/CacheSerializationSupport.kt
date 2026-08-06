@@ -634,3 +634,38 @@ object CacheMetadataSerializer {
         }
     }
 }
+
+data class SerializedClassHierarchy(
+        val classStableName: String,
+        val superClassStableName: String,
+)
+
+internal object ClassHierarchySerializer {
+    fun serialize(records: List<SerializedClassHierarchy>): ByteArray {
+        val stringTable = buildStringTable {
+            records.forEach {
+                +it.classStableName
+                +it.superClassStableName
+            }
+        }
+        val size = stringTable.sizeBytes + records.sumOf { Int.SIZE_BYTES * 2 }
+        val stream = ByteArrayStream(ByteArray(size))
+        stringTable.serialize(stream)
+        records.forEach { record ->
+            stream.writeInt(stringTable.indices[record.classStableName]!!)
+            stream.writeInt(stringTable.indices[record.superClassStableName]!!)
+        }
+        return stream.buf
+    }
+
+    fun deserializeTo(data: ByteArray, result: MutableList<SerializedClassHierarchy>) {
+        val stream = ByteArrayStream(data)
+        val stringTable = StringTable.deserialize(stream)
+        while (stream.hasData()) {
+            val name = stringTable[stream.readInt()]
+            val superName = stringTable[stream.readInt()]
+            result.add(SerializedClassHierarchy(name, superName))
+        }
+    }
+}
+

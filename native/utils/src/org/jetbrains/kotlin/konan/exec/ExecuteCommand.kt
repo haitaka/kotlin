@@ -36,7 +36,7 @@ open class Command(
 
     constructor(tool: String) : this(listOf(tool)) 
     constructor(vararg command: String) : this(command.toList<String>()) 
-    protected val command = initialCommand.toMutableList()
+    val command = initialCommand.toMutableList()
 
     val argsWithExecutable: List<String> = command
 

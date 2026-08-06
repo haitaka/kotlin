@@ -109,6 +109,7 @@ internal class Context(
     }
 
     lateinit var globalHierarchyAnalysisResult: GlobalHierarchyAnalysisResult
+    lateinit var newGHAResult: NewGHAResult
 
     override val typeSystem: IrTypeSystemContext
         get() = IrTypeSystemContextImpl(irBuiltIns)
@@ -118,6 +119,7 @@ internal class Context(
     var objCExportCodeSpec: ObjCExportCodeSpec? = null
 
     fun ghaEnabled() = ::globalHierarchyAnalysisResult.isInitialized
+    fun newGHAEnabled() = ::newGHAResult.isInitialized
 
     @OptIn(K1Deprecation::class)
     val stdlibModule

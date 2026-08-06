@@ -9,6 +9,7 @@ import org.jetbrains.kotlin.backend.common.serialization.FingerprintHash
 import org.jetbrains.kotlin.backend.konan.serialization.CacheMetadata
 import org.jetbrains.kotlin.backend.konan.serialization.CacheMetadataSerializer
 import org.jetbrains.kotlin.backend.konan.serialization.ClassFieldsSerializer
+import org.jetbrains.kotlin.backend.konan.serialization.ClassHierarchySerializer
 import org.jetbrains.kotlin.backend.konan.serialization.EagerInitializedPropertySerializer
 import org.jetbrains.kotlin.backend.konan.serialization.InlineFunctionBodyReferenceSerializer
 import org.jetbrains.kotlin.backend.konan.serialization.TrivialGettersSerializer
@@ -69,6 +70,7 @@ internal class CacheStorage(private val generationState: NativeGenerationState) 
         saveClassFields()
         saveEagerInitializedProperties()
         saveTrivialGetters()
+        saveClassHierarchy()
     }
 
     private fun saveMetadata() {
@@ -100,5 +102,10 @@ internal class CacheStorage(private val generationState: NativeGenerationState) 
     private fun saveTrivialGetters() {
         outputFiles.trivialGettersFile!!.writeBytes(
                 TrivialGettersSerializer.serialize(generationState.trivialGetters))
+    }
+
+    private fun saveClassHierarchy() {
+        outputFiles.classHierarchyFile!!.writeBytes(
+                ClassHierarchySerializer.serialize(generationState.classHierarchy))
     }
 }

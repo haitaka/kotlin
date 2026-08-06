@@ -47,6 +47,8 @@ internal class Runtime(
     val interfaceTableRecordType = getStructType("InterfaceTableRecord")
     val associatedObjectTableRecordType = getStructType("AssociatedObjectTableRecord")
 
+    val classHierarchyIdsType = getStructType("ClassHierarchyIds")
+
     val objHeaderType = getStructType("ObjHeader")
     val arrayHeaderType = getStructType("ArrayHeader")
     val stringHeaderType = getStructType("StringHeader")

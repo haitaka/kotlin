@@ -39,6 +39,8 @@ object KonanBinaryInterface {
     internal const val MANGLE_CLASS_PREFIX = "kclass"
     internal const val MANGLE_FIELD_PREFIX = "kfield"
 
+    internal const val MANGLE_CLASS_IDS_PREFIX = "kclassids"
+
     private val mangler = object : AbstractKonanIrMangler(withReturnType = true, allowOutOfScopeTypeParameters = true) {}
 
     private val exportChecker = mangler.getExportChecker(compatibleMode = true)
@@ -64,7 +66,8 @@ object KonanBinaryInterface {
         check(declaration, SpecialDeclarationType.REGULAR) || declaration.isPlatformSpecificExported()
     }
 
-    private fun withPrefix(prefix: String, mangle: String) = "$prefix:$mangle"
+    // FIXME make private
+    internal fun withPrefix(prefix: String, mangle: String) = "$prefix:$mangle"
 
     private fun IrFunction.findManglingAnnotation() =
         this.annotations.findAnnotation(RuntimeNames.exportForCppRuntime)
@@ -145,6 +148,14 @@ fun IrField.computeSymbolName() = with(KonanBinaryInterface) { symbolName }.repl
 fun IrClass.computeTypeInfoSymbolName() = with(KonanBinaryInterface) { typeInfoSymbolName }.replaceSpecialSymbols()
 
 fun IrClass.computePrivateTypeInfoSymbolName(containerName: String) = with(KonanBinaryInterface) { privateTypeInfoSymbolName(containerName) }.replaceSpecialSymbols()
+
+internal fun IrClass.classHierarchyIdsSymbolName(context: Context): String {
+    val containerName = if (isExported()) null else context.externalDeclarationFileNameProvider.getExternalDeclarationFileName(this)
+    val fqName = fqNameForIrSerialization.toString()
+    return with (KonanBinaryInterface) {
+        withPrefix(MANGLE_CLASS_IDS_PREFIX, containerName?.plus(".$fqName") ?: fqName)
+    }.replaceSpecialSymbols()
+}
 
 /**
  * Delegates to different naming strategies depending on whether the function is exported or not.

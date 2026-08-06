@@ -5,6 +5,8 @@
 
 package org.jetbrains.kotlin.backend.konan.llvm
 
+import GlobalHierarchyUtils
+import kotlinx.cinterop.pointed
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.ir.*
@@ -24,7 +26,7 @@ import org.jetbrains.kotlin.name.NativeRuntimeNames
 internal class RTTIGenerator(
         override val generationState: NativeGenerationState,
         private val referencedFunctions: Set<IrSimpleFunction>?,
-) : ContextUtils {
+) : ContextUtils, GlobalHierarchyUtils {
 
     private val acyclicCache = mutableMapOf<IrType, Boolean>()
     private val safeAcyclicFieldTypes = setOf(
@@ -95,6 +97,7 @@ internal class RTTIGenerator(
             relativeName: String?,
             flags: Int,
             classId: Int,
+            classHierarchyIds: ConstPointer,
             writableTypeInfo: WritableTypeInfoPointer?,
             associatedObjects: ConstPointer?,
             processObjectInMark: ConstPointer?,
@@ -130,6 +133,8 @@ internal class RTTIGenerator(
                     llvm.constInt32(flags),
 
                     llvm.constInt32(classId),
+
+                    classHierarchyIds,
 
                     *listOfNotNull(writableTypeInfo).toTypedArray(),
 
@@ -242,6 +247,8 @@ internal class RTTIGenerator(
 
         val reflectionInfo = getReflectionInfo(irClass)
         val typeInfoGlobal = llvmDeclarations.typeInfoGlobal
+        val classHierarchyIds = if (irClass.isInterface) llvm.nullPointer else
+                constPointer(importGlobal(irClass.classHierarchyIdsStructName, runtime.classHierarchyIdsType, irClass))
         val typeInfo = TypeInfo(
                 irClass.typeInfoPtr,
                 makeExtendedInfo(irClass),
@@ -254,6 +261,7 @@ internal class RTTIGenerator(
                 reflectionInfo.relativeName,
                 flagsFromClass(irClass) or reflectionInfo.reflectionFlags,
                 context.getLayoutBuilder(irClass).classId,
+                classHierarchyIds,
                 llvmDeclarations.writableTypeInfoGlobal,
                 associatedObjects = genAssociatedObjects(irClass),
                 processObjectInMark = when {
@@ -560,6 +568,7 @@ internal class RTTIGenerator(
                 relativeName = ReflectionInfo.EMPTY.relativeName,
                 flags = flagsFromClass(irClass) or (if (immutable) TF_IMMUTABLE else 0),
                 classId = typeHierarchyInfo.classIdLo,
+                classHierarchyIds = llvm.nullPointer, // TODO
                 writableTypeInfo = writableTypeInfo,
                 associatedObjects = null,
                 processObjectInMark = genProcessObjectInMark(bodyType),
