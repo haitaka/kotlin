@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultIrActions
 import org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysis
 import org.jetbrains.kotlin.backend.konan.ir.NewGHA
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
+import org.jetbrains.kotlin.backend.konan.llvm.buildClassHierarchyRecords
 import org.jetbrains.kotlin.backend.konan.optimizations.*
 import org.jetbrains.kotlin.backend.konan.optimizations.DevirtualizationAnalysis
 import org.jetbrains.kotlin.backend.konan.optimizations.ModuleDFG
@@ -32,6 +33,21 @@ internal val NewGHAPhase = createSimpleNamedCompilerPhase<NativeGenerationState,
         name = "NewGHAPhase",
         op = { generationState, irModule ->
             NewGHA(generationState, irModule).run()
+        }
+)
+
+/**
+ * Records the piece of the class hierarchy that this cache contributes, so that the compilation that links
+ * against the cache can assemble the whole hierarchy in [NewGHAPhase]. The two phases are complementary:
+ * a cache contributes its piece, a final binary consumes all the pieces.
+ *
+ * Runs after the lowerings on purpose: the classes declared inside function bodies are only visible here,
+ * and the cached code refers to their class ids as well.
+ */
+internal val BuildClassHierarchyCacheInfoPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
+        name = "BuildClassHierarchyCacheInfo",
+        op = { generationState, irModule ->
+            generationState.classHierarchy += irModule.buildClassHierarchyRecords(generationState.context)
         }
 )
 

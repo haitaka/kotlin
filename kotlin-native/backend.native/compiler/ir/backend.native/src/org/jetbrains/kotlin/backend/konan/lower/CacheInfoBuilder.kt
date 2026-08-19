@@ -5,7 +5,6 @@
 
 package org.jetbrains.kotlin.backend.konan.lower
 
-import GlobalHierarchyUtils
 import org.jetbrains.kotlin.backend.common.serialization.SerializedIrFileFingerprint
 import org.jetbrains.kotlin.backend.common.serialization.SerializedKlibFingerprint
 import org.jetbrains.kotlin.backend.konan.KonanFqNames
@@ -15,7 +14,6 @@ import org.jetbrains.kotlin.backend.konan.isCalledFromExportedInlineFunction
 import org.jetbrains.kotlin.backend.konan.isConstructedFromExportedInlineFunctions
 import org.jetbrains.kotlin.backend.konan.serialization.KonanManglerIr
 import org.jetbrains.kotlin.backend.konan.serialization.KonanPartialModuleDeserializer
-import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedEagerInitializedFile
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedFileReference
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedTrivialGetter
@@ -54,20 +52,6 @@ internal class CacheInfoBuilder(
                     ) {
                         val declaredFields = generationState.context.getLayoutBuilder(declaration).getDeclaredFields(generationState.llvm)
                         generationState.classFields.add(buildSerializedClassFields(declaration, declaredFields, moduleDeserializer))
-                    }
-
-                    if (!declaration.isInterface && declaration.superClass != null) {
-                        lateinit var name: String
-                        lateinit var superName: String
-                        object : GlobalHierarchyUtils {
-                            override val generationState = this@CacheInfoBuilder.generationState
-
-                            init {
-                                name = declaration.stableName
-                                superName = declaration.superClass!!.stableName
-                            }
-                        }
-                        generationState.classHierarchy.add(SerializedClassHierarchy(name, superName))
                     }
                 }
 

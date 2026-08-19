@@ -635,25 +635,38 @@ object CacheMetadataSerializer {
     }
 }
 
+/**
+ * A single class or interface of the hierarchy piece a compilation contributes to its cache.
+ * Supertypes are referenced by their stable names, as their own records may belong to another cache.
+ */
 data class SerializedClassHierarchy(
         val classStableName: String,
-        val superClassStableName: String,
+        val isInterface: Boolean,
+        /**
+         * `null` for interfaces and for the direct children of `Any`: `Any` is never recorded as a superclass,
+         * it is materialized when the whole hierarchy is assembled.
+         */
+        val superClassStableName: String?,
+        val interfaceStableNames: List<String>,
 )
 
 internal object ClassHierarchySerializer {
     fun serialize(records: List<SerializedClassHierarchy>): ByteArray {
         val stringTable = buildStringTable {
-            records.forEach {
-                +it.classStableName
-                +it.superClassStableName
+            records.forEach { record ->
+                +record.classStableName
+                record.superClassStableName?.let { +it }
+                record.interfaceStableNames.forEach { +it }
             }
         }
-        val size = stringTable.sizeBytes + records.sumOf { Int.SIZE_BYTES * 2 }
+        val size = stringTable.sizeBytes + records.sumOf { Int.SIZE_BYTES * (4 + it.interfaceStableNames.size) }
         val stream = ByteArrayStream(ByteArray(size))
         stringTable.serialize(stream)
         records.forEach { record ->
             stream.writeInt(stringTable.indices[record.classStableName]!!)
-            stream.writeInt(stringTable.indices[record.superClassStableName]!!)
+            stream.writeInt(if (record.isInterface) 1 else 0)
+            stream.writeInt(record.superClassStableName?.let { stringTable.indices[it]!! } ?: INVALID_INDEX)
+            stream.writeIntArray(record.interfaceStableNames.map { stringTable.indices[it]!! }.toIntArray())
         }
         return stream.buf
     }
@@ -662,9 +675,16 @@ internal object ClassHierarchySerializer {
         val stream = ByteArrayStream(data)
         val stringTable = StringTable.deserialize(stream)
         while (stream.hasData()) {
-            val name = stringTable[stream.readInt()]
-            val superName = stringTable[stream.readInt()]
-            result.add(SerializedClassHierarchy(name, superName))
+            val classStableName = stringTable[stream.readInt()]
+            val isInterface = stream.readInt() != 0
+            val superClassIndex = stream.readInt()
+            val interfaceStableNames = stream.readIntArray().map { stringTable[it] }
+            result.add(SerializedClassHierarchy(
+                    classStableName = classStableName,
+                    isInterface = isInterface,
+                    superClassStableName = if (superClassIndex == INVALID_INDEX) null else stringTable[superClassIndex],
+                    interfaceStableNames = interfaceStableNames,
+            ))
         }
     }
 }

@@ -183,8 +183,8 @@ class CachedLibraries(
 
             override fun computeSerializedClassHierarchy() = mutableListOf<SerializedClassHierarchy>().also {
                 existingFileDirs.forEach { fileDir ->
-                    val data = fileDir.child(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).child(CLASS_HIERARCHY_FILE_NAME).readBytes()
-                    ClassHierarchySerializer.deserializeTo(data, it)
+                    val file = fileDir.child(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).child(CLASS_HIERARCHY_FILE_NAME)
+                    if (file.exists) ClassHierarchySerializer.deserializeTo(file.readBytes(), it)
                 }
             }
 

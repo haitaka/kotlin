@@ -5,7 +5,6 @@
 
 package org.jetbrains.kotlin.backend.konan.llvm
 
-import GlobalHierarchyUtils
 import kotlinx.cinterop.pointed
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.*
@@ -26,7 +25,7 @@ import org.jetbrains.kotlin.name.NativeRuntimeNames
 internal class RTTIGenerator(
         override val generationState: NativeGenerationState,
         private val referencedFunctions: Set<IrSimpleFunction>?,
-) : ContextUtils, GlobalHierarchyUtils {
+) : ContextUtils {
 
     private val acyclicCache = mutableMapOf<IrType, Boolean>()
     private val safeAcyclicFieldTypes = setOf(
@@ -247,8 +246,9 @@ internal class RTTIGenerator(
 
         val reflectionInfo = getReflectionInfo(irClass)
         val typeInfoGlobal = llvmDeclarations.typeInfoGlobal
-        val classHierarchyIds = if (irClass.isInterface) llvm.nullPointer else
-                constPointer(importGlobal(irClass.classHierarchyIdsStructName, runtime.classHierarchyIdsType, irClass))
+        // Without the optimizations the global hierarchy analysis doesn't run, so there are no class ids to point at.
+        val classHierarchyIds = if (irClass.isInterface || !context.shouldOptimize()) llvm.nullPointer else
+                constPointer(importGlobal(irClass.classHierarchyIdsStructName(context), runtime.classHierarchyIdsType, irClass))
         val typeInfo = TypeInfo(
                 irClass.typeInfoPtr,
                 makeExtendedInfo(irClass),

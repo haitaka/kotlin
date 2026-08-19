@@ -6,7 +6,6 @@
 package org.jetbrains.kotlin.backend.konan.llvm
 
 
-import GlobalHierarchyUtils
 import kotlinx.cinterop.*
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
@@ -28,7 +27,7 @@ import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import org.jetbrains.kotlin.utils.addToStdlib.runIf
 
 
-internal class CodeGenerator(override val generationState: NativeGenerationState) : ContextUtils, GlobalHierarchyUtils {
+internal class CodeGenerator(override val generationState: NativeGenerationState) : ContextUtils {
     fun addFunction(proto: LlvmFunctionProto): LlvmCallable =
             proto.createLlvmFunction(context, llvm.module)
 
@@ -248,7 +247,7 @@ internal object VirtualTablesLookup {
 
     fun FunctionGenerationContext.checkIsSubtype(objTypeInfo: LLVMValueRef, dstClass: IrClass) = if (!context.ghaEnabled()) {
         if (context.newGHAEnabled() && !dstClass.isInterface) {
-            val struct = importGlobal(dstClass.classHierarchyIdsStructName, runtime.classHierarchyIdsType, dstClass)
+            val struct = importGlobal(dstClass.classHierarchyIdsStructName(context), runtime.classHierarchyIdsType, dstClass)
             val classIdLo = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 0 /* classIdLo */))
             val classIdHi = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 1 /* classIdHi */))
             call(llvm.isSubclassFastNewFunction,
@@ -588,7 +587,7 @@ internal abstract class FunctionGenerationContext(
         private val needSafePoint: Boolean,
         internal val irFunction: IrSimpleFunction? = null,
         private val forceCleanupLandingpad: Boolean = false,
-) : ContextUtils, GlobalHierarchyUtils {
+) : ContextUtils {
 
     constructor(builder: FunctionGenerationContextBuilder<*>) : this(
             function = builder.function,
@@ -1621,7 +1620,7 @@ internal class DefaultFunctionGenerationContext(
         switchToRunnable,
         needSafePoint,
         irFunction
-), GlobalHierarchyUtils {
+) {
     // Note: return handling can be extracted to a separate class.
 
     private val returns: MutableMap<LLVMBasicBlockRef, LLVMValueRef> = mutableMapOf()

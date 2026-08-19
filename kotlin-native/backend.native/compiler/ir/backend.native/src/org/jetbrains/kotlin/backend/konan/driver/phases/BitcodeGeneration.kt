@@ -5,7 +5,6 @@
 
 package org.jetbrains.kotlin.backend.konan.driver.phases
 
-import GlobalHierarchyUtils
 import llvm.DIFinalize
 import org.jetbrains.kotlin.backend.common.phaser.KotlinBackendIrHolder
 import org.jetbrains.kotlin.backend.common.phaser.createSimpleNamedCompilerPhase
@@ -77,16 +76,5 @@ internal val CodegenPhase = createSimpleNamedCompilerPhase<NativeGenerationState
 
             if (generationState.hasDebugInfo())
                 DIFinalize(generationState.debugInfo.builder)
-
-            if (context.newGHAEnabled()) {
-                object : GlobalHierarchyUtils {
-                    override val generationState = generationState
-                    init {
-                        for ([className, hierarchyInfo] in context.newGHAResult.data) {
-                            createClassHierarchyIdsStruct(className, hierarchyInfo.classIdLo, hierarchyInfo.classIdHi)
-                        }
-                    }
-                }
-            }
         }
 )

@@ -358,6 +358,10 @@ internal class CodeGeneratorVisitor(
             codegen.objCDataGenerator?.finishModule()
 
             overrideRuntimeGlobals()
+            // Note: has to happen before llvm.used is appended, otherwise the class ids of the classes
+            // that this module doesn't reference itself get internalized and dropped, leaving the cached
+            // code that does reference them with undefined symbols.
+            codegen.createClassHierarchyIdsStructs()
             appendLlvmUsed("llvm.used", llvm.usedFunctions.map { it.toConstPointer().llvm } + llvm.usedGlobals)
             appendLlvmUsed("llvm.compiler.used", llvm.compilerUsedGlobals)
             if (context.config.produceCInterface) {
