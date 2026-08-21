@@ -6,47 +6,63 @@ import hair.opt.Normalization
 import hair.opt.eliminateDead
 import hair.utils.isEmpty
 
-class RawNodeBuilder(override val session: Session) : NodeBuilder {
-    override fun onNodeBuilt(node: Node): Node = node
+fun interface OnNodeBuilt {
+    fun onNodeBuilt(node: Node): Node
 }
 
-object RawArgsUpdater : ArgumentUpdater {
-    override fun onArgUpdate(node: Node, index: Int, oldValue: Node?, newValue: Node?) {
-        // FIXME consider moving into the base updateArg
-        require(newValue != oldValue)
-        oldValue?.removeUse(node)
-        newValue?.addUse(node)
+class SessionImpl: Session() {
+    // FIXME try to remove?
+    val rawNodeBuilder: NodeBuilder = object : NodeBuilder {
+        override val session: Session
+            get() = this@SessionImpl
+        override fun onNodeBuilt(node: Node): Node = node
+    }
+
+    val nodeBuilder: NodeBuilder = WiringUpNodeBuilder(this)
+
+    val argUpdater: ArgumentUpdater = ArgumentUpdaterImpl(this)
+    val normalization = Normalization(this)
+
+    fun wireUp(node: Node): Node {
+        // TODO rewrite
+        val normal = normalization.normalize(node)
+        val replacement = gvn(normal)
+        // TODO rename registered
+        if (!replacement.registered) register(replacement)
+        require(replacement.registered)
+        return onNodeBuilt.onNodeBuilt(replacement)
+    }
+
+    private var onNodeBuilt: OnNodeBuilt = OnNodeBuilt { it }
+
+    fun <T> withOnNodeBuiltHandler(onNodeBuiltProvider: (OnNodeBuilt) -> OnNodeBuilt, block: () -> T): T {
+        val previous = onNodeBuilt
+        onNodeBuilt = onNodeBuiltProvider(previous)
+        try {
+            return block()
+        } finally {
+            onNodeBuilt = previous
+        }
     }
 }
 
-open class NormalizingNodeBuilder(override val session: Session) : NodeBuilder {
-    // FIXME use proper args updater
-    val normalization = Normalization(session, this, RawArgsUpdater)
-
-    override fun onNodeBuilt(node: Node): Node = normalization.normalize(node).also {
-        // node must still be not-GVNed
-        require(node !in session.allNodes())
-    }
+class WiringUpNodeBuilder internal constructor(override val session: SessionImpl) : NodeBuilder {
+    override fun onNodeBuilt(node: Node): Node = session.wireUp(node)
 }
 
-open class NormalizingGvnNodeBuilder(session: Session) : NormalizingNodeBuilder(session) {
-    override fun onNodeBuilt(node: Node): Node = session.gvn(super.onNodeBuilt(node))
-}
+val Session.rawNodeBuilder get() = (this as SessionImpl).rawNodeBuilder
 
-class RegisteringNodeBuilder(session: Session) : NormalizingGvnNodeBuilder(session) {
-    override fun onNodeBuilt(node: Node): Node = super.onNodeBuilt(node).also {
-        if (!it.registered) session.register(it)
-        require(it.registered)
-    }
-}
+val Session.nodeBuilder get() = (this as SessionImpl).nodeBuilder
+val Session.argUpdater get() = (this as SessionImpl).argUpdater
+val Session.normalization get() = (this as SessionImpl).normalization
 
-class ArgumentUpdaterImpl(val session: Session, nodeBuilder: NodeBuilder) : ArgumentUpdater {
-    val normalization = Normalization(session, nodeBuilder, this)
+class ArgumentUpdaterImpl(val session: SessionImpl) : ArgumentUpdater {
     override fun onArgUpdate(node: Node, index: Int, oldValue: Node?, newValue: Node?) {
         require(newValue != oldValue)
         oldValue?.removeUse(node)
         if (newValue != null) {
-            val normal = normalization.normalize(node)
+            // FIXME maybe simplify?
+            val normal = session.normalization.normalize(node)
             val replacement: Node = if (normal != node) {
                 normal
             } else {
@@ -66,14 +82,15 @@ class ArgumentUpdaterImpl(val session: Session, nodeBuilder: NodeBuilder) : Argu
     }
 }
 
-private val Session.nodeBuilder: RegisteringNodeBuilder get() = RegisteringNodeBuilder(this)
-private val Session.argUpdater: ArgumentUpdaterImpl get() = ArgumentUpdaterImpl(this, nodeBuilder)
+fun <T> Session.withOnNodeBuiltHandler(onNodeBuiltProvider: (OnNodeBuilt) -> OnNodeBuilt, block: () -> T): T =
+    (this as SessionImpl).withOnNodeBuiltHandler(onNodeBuiltProvider, block)
 
-context(nodeBuilder: NodeBuilder)
-val normalization: Normalization get() = when (nodeBuilder) {
-    is NormalizingNodeBuilder -> nodeBuilder.normalization
-    else -> error("Should not reach here")//NormalizationImpl(nodeBuilder.session, nodeBuilder, SimpleArgsUpdater)
-}
+fun <T> Session.observingNodesBuilt(observer: (Node) -> Unit, block: () -> T): T = withOnNodeBuiltHandler(
+    { outer ->
+        { node -> outer.onNodeBuilt(node).also { observer(it) } }
+    },
+    block
+)
 
 fun <T> Session.buildInitialIR(
     builderAction: context(NodeBuilder, ControlFlowBuilder) ArgumentUpdater.() -> T

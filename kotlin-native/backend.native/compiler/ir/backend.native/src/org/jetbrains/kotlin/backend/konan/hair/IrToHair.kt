@@ -466,14 +466,19 @@ internal class HairGenerator(val context: NativeBackendContext, val module: IrMo
                         return tryCatch(tryBody = {
                             aTry.tryResult.accept(this, Unit)
                         }, catches = aTry.catches.map { irCatch ->
-                            // FIXME can the type be null?
-                            val catchType = irCatch.catchParameter.type.getClass()!!.let { HairClassImpl(it) }
+                            val catchType = HairClassImpl(irCatch.catchParameter.type.getClass()!!)
                             val catchBuilder: CatchBuilder = { exception ->
                                 AssignVar(irCatch.catchParameter.symbol)(exception)
                                 irCatch.accept(this, Unit)
                             }
                             catchType to catchBuilder
                         })
+                    }
+
+                    override fun visitCatch(aCatch: IrCatch, data: Unit): Node {
+                        // TODO param
+                        val res = aCatch.result.accept(this, Unit)
+                        return res
                     }
 
                     override fun visitThrow(expression: IrThrow, data: Unit): Node {

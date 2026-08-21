@@ -56,7 +56,6 @@ fun Node.deregister() {
     session.unregister(this)
 }
 
-// TODO
 interface NodeBuilder {
     val session: Session
     fun onNodeBuilt(node: Node): Node

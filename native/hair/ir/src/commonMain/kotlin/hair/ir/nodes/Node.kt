@@ -1,6 +1,7 @@
 package hair.ir.nodes
 
 import hair.ir.NodeVisitor
+import hair.ir.Session
 import hair.sym.HairType
 import kotlin.collections.plus
 import kotlin.collections.remove
