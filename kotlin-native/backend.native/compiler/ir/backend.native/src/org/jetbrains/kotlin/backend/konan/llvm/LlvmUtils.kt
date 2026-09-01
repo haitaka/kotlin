@@ -155,6 +155,15 @@ internal fun ContextUtils.importGlobal(name: String, type: LLVMTypeRef, declarat
 
 internal fun ContextUtils.importObjCGlobal(name: String, type: LLVMTypeRef) = importGlobal(name, type)
 
+/**
+ * A global of one of the class hierarchy structures, declared by the compilations that only refer to it
+ * and defined by the one that lays the whole hierarchy out.
+ */
+internal fun ContextUtils.importGlobalHierarchyGlobal(name: String, type: LLVMTypeRef) = importGlobal(name, type)
+
+internal fun ContextUtils.createGlobalHierarchyGlobal(name: String, type: LLVMTypeRef) =
+        staticData.getGlobal(name) ?: staticData.createGlobal(type, name, isExported = true)
+
 internal fun ContextUtils.importNativeRuntimeGlobal(name: String, type: LLVMTypeRef) =
         importGlobal(name, type).also { generationState.dependenciesTracker.addNativeRuntime() }
 

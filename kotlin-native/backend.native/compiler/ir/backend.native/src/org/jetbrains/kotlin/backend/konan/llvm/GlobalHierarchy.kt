@@ -1,10 +1,15 @@
 package org.jetbrains.kotlin.backend.konan.llvm
 
+import llvm.LLVMArrayType
 import org.jetbrains.kotlin.backend.konan.Context
+import org.jetbrains.kotlin.backend.konan.ir.ClassGlobalHierarchyInfo
+import org.jetbrains.kotlin.backend.konan.ir.NewInterfaceTableEntry
 import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
+import org.jetbrains.kotlin.backend.konan.ir.isAbstract
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrClass
+import org.jetbrains.kotlin.ir.objcinterop.isObjCClass
 import org.jetbrains.kotlin.ir.types.classOrNull
 import org.jetbrains.kotlin.ir.util.isInterface
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
@@ -13,14 +18,42 @@ import org.jetbrains.kotlin.ir.visitors.acceptVoid
 
 /**
  * The name a class is known by in the class hierarchy. It is the key the hierarchy pieces of the separate
- * compilations are stitched together by, and, being also the symbol name of the class ids global, the very
- * thing that makes the ids computed here resolve against the code compiled into a cache.
+ * compilations are stitched together by, and the base of the symbol names of all the hierarchy structures
+ * of the class, which is what makes the ids computed here resolve against the code compiled into a cache.
  */
-internal fun IrClass.classHierarchyStableName(context: Context): String =
-        classHierarchyIdsSymbolName(context) // TODO without prefix
+internal fun IrClass.classHierarchyStableName(context: Context): String = globalHierarchyName(context)
 
 internal fun IrClass.classHierarchyIdsStructName(context: Context): String =
-        classHierarchyStableName(context) // TODO with prefix
+        classHierarchyIdsSymbolName(classHierarchyStableName(context))
+
+internal fun IrClass.interfaceTableSymbolName(context: Context): String =
+        interfaceTableSymbolName(classHierarchyStableName(context))
+
+internal fun IrClass.interfaceIdSymbolName(context: Context): String =
+        interfaceIdSymbolName(classHierarchyStableName(context))
+
+internal fun interfaceIdSymbolName(stableName: String): String =
+        globalHierarchySymbolName(stableName, KonanBinaryInterface.MANGLE_IFACE_ID_PREFIX)
+
+internal fun classHierarchyIdsSymbolName(stableName: String): String =
+        globalHierarchySymbolName(stableName, KonanBinaryInterface.MANGLE_CLASS_IDS_PREFIX)
+
+internal fun interfaceTableSymbolName(stableName: String): String =
+        globalHierarchySymbolName(stableName, KonanBinaryInterface.MANGLE_ITABLE_PREFIX)
+
+private fun interfaceTableRecordsSymbolName(stableName: String): String =
+        globalHierarchySymbolName(stableName, KonanBinaryInterface.MANGLE_ITABLE_RECORDS_PREFIX)
+
+/** The vtable of the methods of one interface as implemented by one class. */
+internal fun interfaceVTableSymbolName(classStableName: String, interfaceStableName: String): String =
+        globalHierarchySymbolName("$classStableName#$interfaceStableName", KonanBinaryInterface.MANGLE_IFACE_VTABLE_PREFIX)
+
+/**
+ * Whether instances of [this] class dispatch interface calls and answer interface type checks through
+ * an interface lookup table of their own. The other classes never own one: they have no instances.
+ */
+internal val IrClass.needsInterfaceTable: Boolean
+    get() = !isInterface && !isAbstract() && !isObjCClass()
 
 /**
  * The hierarchy record of [this] class, as seen by the compilation that declares it.
@@ -34,6 +67,8 @@ internal fun IrClass.buildClassHierarchyRecord(context: Context) = SerializedCla
         interfaceStableNames = superTypes.mapNotNull { it.classOrNull?.owner }
                 .filter { it.isInterface }
                 .map { it.classHierarchyStableName(context) },
+        interfaceVTableSize = if (isInterface) context.getLayoutBuilder(this).interfaceVTableEntries.size else 0,
+        hasInterfaceTable = needsInterfaceTable,
 )
 
 /**
@@ -62,12 +97,112 @@ internal fun IrElement.buildClassHierarchyRecords(context: Context): List<Serial
  */
 internal fun ContextUtils.createClassHierarchyIdsStructs() {
     if (!context.newGHAEnabled()) return
-    for ([classStableName, hierarchyInfo] in context.newGHAResult.data) {
-        val symbolName = classStableName // TODO with prefix
-        val global = staticData.getGlobal(symbolName)
-                ?: staticData.createGlobal(runtime.classHierarchyIdsType, symbolName, isExported = true)
-        global.setInitializer(Struct(runtime.classHierarchyIdsType, llvm.constInt32(hierarchyInfo.classIdLo), llvm.constInt32(hierarchyInfo.classIdHi)))
+    for ([stableName, hierarchyInfo] in context.newGHAResult.classIds) {
+        val global = createGlobalHierarchyGlobal(classHierarchyIdsSymbolName(stableName), runtime.classHierarchyIdsType)
+        global.setInitializer(Struct(runtime.classHierarchyIdsType,
+                llvm.constInt32(hierarchyInfo.classIdLo), llvm.constInt32(hierarchyInfo.classIdHi)))
         global.setConstant(true)
         llvm.usedGlobals += global.llvmGlobal
     }
+}
+
+/**
+ * Emits the interface ids computed by the global hierarchy analysis. Like the class ids, they can only be known
+ * once the whole hierarchy is there, so every use site — a type check, an interface call, a table record —
+ * reaches them through these globals rather than through a constant of its own.
+ */
+internal fun ContextUtils.createInterfaceIdGlobals() {
+    if (!context.newGHAEnabled()) return
+    for ([stableName, interfaceId] in context.newGHAResult.interfaceIds) {
+        val global = createGlobalHierarchyGlobal(interfaceIdSymbolName(stableName), llvm.int32Type)
+        global.setInitializer(llvm.constInt32(interfaceId))
+        global.setConstant(true)
+        llvm.usedGlobals += global.llvmGlobal
+    }
+}
+
+/**
+ * Emits the interface lookup tables of the whole program: the layout is keyed by the interface ids, which only
+ * the final compilation knows, so the caches merely refer to the tables of the classes they declare. The vtables
+ * the records point at are the other way around — a cache emits them for the classes it compiles.
+ */
+internal fun ContextUtils.createInterfaceTables() {
+    if (!context.newGHAEnabled()) return
+    context.newGHAResult.interfaceTables.forEach { [stableName, entries] -> createInterfaceTable(stableName, entries) }
+}
+
+/**
+ * Emits the interface lookup table of the class [stableName]. The vtable of every record is the one the
+ * compilation of that class emitted: already defined here if that is this very compilation, imported from
+ * its cache otherwise.
+ */
+internal fun ContextUtils.createInterfaceTable(stableName: String, entries: List<NewInterfaceTableEntry>): ConstPointer {
+    val [slots, size] = layOutInterfaceTable(entries) { it.interfaceId }
+    val records = slots.map { entry ->
+        // kInvalidInterfaceId is zero, and the ids are numerated from one, so an empty slot holds zeroes.
+        Struct(runtime.interfaceTableRecordType,
+                llvm.constInt32(entry?.interfaceId ?: 0),
+                llvm.constInt32(entry?.vtableSize ?: 0),
+                if (entry == null) llvm.nullPointer else interfaceVTable(stableName, entry),
+        )
+    }
+    val recordsPtr = staticData.placeGlobalConstArray(interfaceTableRecordsSymbolName(stableName),
+            runtime.interfaceTableRecordType, records)
+    val table = createGlobalHierarchyGlobal(interfaceTableSymbolName(stableName), runtime.interfaceTableType)
+    table.setInitializer(Struct(runtime.interfaceTableType, llvm.constInt32(size), recordsPtr))
+    table.setConstant(true)
+    llvm.usedGlobals += table.llvmGlobal
+    return table.pointer
+}
+
+private fun ContextUtils.interfaceVTable(classStableName: String, entry: NewInterfaceTableEntry): ConstPointer {
+    // An interface with no methods of its own has no vtable to point at, and no call can ever reach for one.
+    if (entry.vtableSize == 0) return llvm.nullPointer
+    val symbolName = interfaceVTableSymbolName(classStableName, entry.interfaceStableName)
+    return staticData.getGlobal(symbolName)?.pointer
+            ?: constPointer(importGlobalHierarchyGlobal(symbolName, LLVMArrayType(llvm.pointerType, entry.vtableSize)!!))
+}
+
+/**
+ * Places [entries] into the slots of an interface lookup table: a perfect hash table keyed by the color bits of
+ * the interface ids when they fit into one, and a table sorted by the interface id otherwise. Returns the slots
+ * along with the size to record in the table: the mask for the former shape, the negated count for the latter.
+ * The details of the scheme are in [org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysis].
+ */
+internal fun <T> layOutInterfaceTable(entries: List<T>, interfaceId: (T) -> Int): Pair<List<T?>, Int> {
+    // Find the optimal size. It must be a power of 2.
+    var size = 1
+    val maxSize = 1 shl ClassGlobalHierarchyInfo.MAX_BITS_PER_COLOR
+    val used = BooleanArray(maxSize)
+    while (size <= maxSize) {
+        for (i in 0 until size)
+            used[i] = false
+        // Check for collisions.
+        var ok = true
+        for (entry in entries) {
+            val index = interfaceId(entry) and (size - 1)
+            if (used[index]) {
+                ok = false
+                break
+            }
+            used[index] = true
+        }
+        if (ok) break
+        size *= 2
+    }
+
+    if (size <= maxSize) {
+        val slots = arrayOfNulls<Any?>(size)
+        for (entry in entries)
+            slots[interfaceId(entry) and (size - 1)] = entry
+        @Suppress("UNCHECKED_CAST")
+        return Pair(slots.toList() as List<T?>, size - 1)
+    }
+
+    val sorted = entries.sortedBy(interfaceId)
+    for (i in 1 until sorted.size)
+        require(interfaceId(sorted[i - 1]) != interfaceId(sorted[i])) {
+            "Different interfaces have same interface id: ${interfaceId(sorted[i])}"
+        }
+    return Pair(sorted, -sorted.size)
 }

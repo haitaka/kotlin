@@ -22,6 +22,10 @@ class ClassHierarchy(records: List<SerializedClassHierarchy>, anyName: String) {
     class ClassEntry(
             val name: String,
             val isInterface: Boolean,
+            /** The number of the itable vtable entries of this interface; zero for a class. */
+            val interfaceVTableSize: Int = 0,
+            /** Whether this class can have instances, and thus needs an interface lookup table of its own. */
+            val hasInterfaceTable: Boolean = false,
     ) {
         var superClass: ClassEntry? = null
             internal set
@@ -40,7 +44,7 @@ class ClassHierarchy(records: List<SerializedClassHierarchy>, anyName: String) {
     init {
         val entriesByName = records.associateBy(
                 { it.classStableName },
-                { ClassEntry(it.classStableName, it.isInterface) }
+                { ClassEntry(it.classStableName, it.isInterface, it.interfaceVTableSize, it.hasInterfaceTable) }
         ).toMutableMap()
 
         // Any is never recorded as a superclass, so it is materialized here instead, and every class
@@ -96,7 +100,7 @@ class ClassHierarchy(records: List<SerializedClassHierarchy>, anyName: String) {
     // ---- Transitive relations ---------------------------------------------
 
     /** Transitive supertypes, excluding [cls] itself. */
-    //fun allSupertypes(cls: ClassEntry): Set<ClassEntry> = allSupers[cls] ?: emptySet()
+    fun allSupertypes(cls: ClassEntry): Set<ClassEntry> = allSupers[cls] ?: emptySet()
 
     /** Transitive subtypes, excluding [cls] itself. Drives devirtualization / exhaustiveness. */
     //fun allSubtypes(cls: ClassEntry): Set<ClassEntry> = allSubs[cls] ?: emptySet()

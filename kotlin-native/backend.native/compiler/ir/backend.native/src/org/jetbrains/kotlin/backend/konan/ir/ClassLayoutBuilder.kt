@@ -271,7 +271,27 @@ internal class GlobalHierarchyAnalysis(val context: Context, val irModule: IrMod
 
 internal data class NewClassGHAInfo(val classIdLo: Int, val classIdHi: Int)
 
-internal data class NewGHAResult(val data: Map<String, NewClassGHAInfo>)
+/**
+ * The ids [NewGHA] computed for the whole program, keyed by the stable names of the classes and interfaces.
+ *
+ * A class is identified by the interval of its subtree, so a check against it is a range check; an interface
+ * is identified by a single colored id, so a check against it is a lookup in the itable of the object's class.
+ */
+/** One entry of the interface lookup table of a class: the interface, its id and the size of its vtable. */
+internal class NewInterfaceTableEntry(
+        val interfaceStableName: String,
+        val interfaceId: Int,
+        val vtableSize: Int,
+)
+
+internal class NewGHAResult(
+        val classIds: Map<String, NewClassGHAInfo>,
+        val interfaceIds: Map<String, Int>,
+        /** The entries of the interface lookup table of every class that owns one, keyed by its stable name. */
+        val interfaceTables: Map<String, List<NewInterfaceTableEntry>>,
+        /** How many lower bits of an interface id hold its color, and thus how large the itables have to be. */
+        val bitsPerColor: Int,
+)
 
 internal class NewGHA(val generationState: NativeGenerationState, val irModule: IrModuleFragment) {
     private val context = generationState.context
@@ -290,22 +310,86 @@ internal class NewGHA(val generationState: NativeGenerationState, val irModule: 
                 anyName = context.irBuiltIns.anyClass.owner.classHierarchyStableName(context),
         )
 
-        val classHierarchyIds = mutableMapOf<String, NewClassGHAInfo>()
+        val classIds = mutableMapOf<String, NewClassGHAInfo>()
         var time = 0
-        // TODO handle interface coloring: the intervals below are a single inheritance numbering,
-        // so only classes take part in the traversal, although the hierarchy also knows the interfaces.
+        // Only the classes take part in the traversal: the intervals are a single inheritance numbering,
+        // and the interfaces are numbered by the coloring below instead.
         fun dfs(classEntry: ClassHierarchy.ClassEntry) {
             ++time
             // Make the Any's interval's left border -1 in order to correctly generate classes for ObjC blocks.
             val enterTime = if (classEntry == hierarchy.any) -1 else time
             hierarchy.directSubtypes(classEntry).forEach { if (!it.isInterface) dfs(it) }
             val exitTime = time
-            classHierarchyIds[classEntry.name] = NewClassGHAInfo(enterTime, exitTime)
+            classIds[classEntry.name] = NewClassGHAInfo(enterTime, exitTime)
         }
 
         dfs(hierarchy.any)
 
-        context.newGHAResult = NewGHAResult(classHierarchyIds)
+        val colors = colorInterfaces(hierarchy)
+        val maxColor = colors.values.maxOrNull() ?: 0
+        var bitsPerColor = 0
+        var x = maxColor
+        while (x > 0) {
+            ++bitsPerColor
+            x /= 2
+        }
+
+        val maxInterfaceId = Int.MAX_VALUE shr bitsPerColor
+        val colorCounts = IntArray(maxColor + 1)
+        val interfaceIds = mutableMapOf<String, Int>()
+        for ([entry, color] in colors) {
+            // Numerate from 1 (reserve 0 for invalid value).
+            val interfaceId = ++colorCounts[color]
+            require(interfaceId <= maxInterfaceId) { "Unable to assign interface id to ${entry.name}" }
+            interfaceIds[entry.name] = color or (interfaceId shl bitsPerColor)
+        }
+
+        // The layout of an interface table is keyed by the ids above, so it can only be decided here, once.
+        val interfaceTables = hierarchy.entries.filter { it.hasInterfaceTable }.associate { entry ->
+            entry.name to hierarchy.allSupertypes(entry).filter { it.isInterface }.map {
+                NewInterfaceTableEntry(it.name, interfaceIds.getValue(it.name), it.interfaceVTableSize)
+            }
+        }
+
+        context.newGHAResult = NewGHAResult(classIds, interfaceIds, interfaceTables, bitsPerColor)
+    }
+
+    /**
+     * A proper coloring of the graph whose vertices are the interfaces of the program and whose edges connect
+     * the interfaces implemented by one and the same class. Storing the color in the lower bits of an interface
+     * id then makes `itable[interfaceId & (itableSize - 1)]` a perfect hash table; see [GlobalHierarchyAnalysis]
+     * for the full explanation of the scheme.
+     */
+    private fun colorInterfaces(hierarchy: ClassHierarchy): Map<ClassHierarchy.ClassEntry, Int> {
+        val interfaces = hierarchy.entries.filter { it.isInterface }
+        val indices = HashMap<ClassHierarchy.ClassEntry, Int>(interfaces.size)
+        interfaces.forEachIndexed { index, entry -> indices[entry] = index }
+
+        val conflicts = Array(interfaces.size) { mutableSetOf<Int>() }
+        for (entry in hierarchy.entries) {
+            if (entry.isInterface) continue
+            val implemented = hierarchy.allSupertypes(entry).filter { it.isInterface }.map { indices.getValue(it) }
+            for (i in implemented.indices)
+                for (j in i + 1 until implemented.size) {
+                    conflicts[implemented[i]] += implemented[j]
+                    conflicts[implemented[j]] += implemented[i]
+                }
+        }
+
+        // Greedy coloring: take the first color no already colored conflicting interface has taken.
+        val colors = IntArray(interfaces.size) { -1 }
+        var numberOfColors = 0
+        val used = BooleanArray(interfaces.size)
+        for (v in interfaces.indices) {
+            for (c in 0 until numberOfColors)
+                used[c] = false
+            for (u in conflicts[v])
+                if (colors[u] >= 0)
+                    used[colors[u]] = true
+            colors[v] = (0 until numberOfColors).firstOrNull { !used[it] } ?: numberOfColors++
+        }
+
+        return interfaces.indices.associate { interfaces[it] to colors[it] }
     }
 }
 
@@ -446,20 +530,20 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
                 .sortedBy { it.uniqueName }
     }
 
-    data class InterfaceTablePlace(val interfaceId: Int, val itableSize: Int, val methodIndex: Int) {
+    data class InterfaceTablePlace(val irInterface: IrClass?, val interfaceId: Int, val itableSize: Int, val methodIndex: Int) {
         companion object {
-            val INVALID = InterfaceTablePlace(0, -1, -1)
+            val INVALID = InterfaceTablePlace(null, 0, -1, -1)
         }
     }
 
     val classId: Int get() = when {
         irClass.isKotlinObjCClass() -> 0
-        irClass.isInterface -> {
-            if (context.ghaEnabled()) {
-                hierarchyInfo.interfaceId
-            } else {
-                localHash(irClass.fqNameForIrSerialization.asString().toByteArray()).toInt()
-            }
+        irClass.isInterface -> when {
+            context.ghaEnabled() -> hierarchyInfo.interfaceId
+            // Only the compilation that lays out the whole hierarchy knows the interface ids; the others reach
+            // them through the [interfaceIdSymbolName] globals, and never need a constant of their own.
+            context.newGHAEnabled() -> context.newGHAResult.interfaceIds.getValue(irClass.classHierarchyStableName(context))
+            else -> localHash(irClass.fqNameForIrSerialization.asString().toByteArray()).toInt()
         }
         else -> {
             if (context.ghaEnabled()) {
@@ -475,7 +559,7 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
         val interfaceVTable = interfaceVTableEntries
         val index = interfaceVTable.indexOf(function)
         if (index >= 0)
-            return InterfaceTablePlace(classId, interfaceVTable.size, index)
+            return InterfaceTablePlace(irClass, classId, interfaceVTable.size, index)
         val superFunction = function.overriddenSymbols.first().owner
         return context.getLayoutBuilder(superFunction.parentAsClass).itablePlace(superFunction)
     }

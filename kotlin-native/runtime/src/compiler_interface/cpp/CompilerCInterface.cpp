@@ -27,6 +27,7 @@ touchType(TypeInfo)
 touchType(ClassHierarchyIds)
 touchType(ExtendedTypeInfo)
 touchType(InterfaceTableRecord)
+touchType(InterfaceTable)
 touchType(AssociatedObjectTableRecord)
 
 touchType(ObjHeader)

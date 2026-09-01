@@ -648,6 +648,10 @@ data class SerializedClassHierarchy(
          */
         val superClassStableName: String?,
         val interfaceStableNames: List<String>,
+        /** The number of the itable vtable entries of this interface; zero for a class. */
+        val interfaceVTableSize: Int,
+        /** Whether this class can have instances, and thus needs an interface lookup table of its own. */
+        val hasInterfaceTable: Boolean,
 )
 
 internal object ClassHierarchySerializer {
@@ -659,7 +663,7 @@ internal object ClassHierarchySerializer {
                 record.interfaceStableNames.forEach { +it }
             }
         }
-        val size = stringTable.sizeBytes + records.sumOf { Int.SIZE_BYTES * (4 + it.interfaceStableNames.size) }
+        val size = stringTable.sizeBytes + records.sumOf { Int.SIZE_BYTES * (6 + it.interfaceStableNames.size) }
         val stream = ByteArrayStream(ByteArray(size))
         stringTable.serialize(stream)
         records.forEach { record ->
@@ -667,6 +671,8 @@ internal object ClassHierarchySerializer {
             stream.writeInt(if (record.isInterface) 1 else 0)
             stream.writeInt(record.superClassStableName?.let { stringTable.indices[it]!! } ?: INVALID_INDEX)
             stream.writeIntArray(record.interfaceStableNames.map { stringTable.indices[it]!! }.toIntArray())
+            stream.writeInt(record.interfaceVTableSize)
+            stream.writeInt(if (record.hasInterfaceTable) 1 else 0)
         }
         return stream.buf
     }
@@ -679,11 +685,15 @@ internal object ClassHierarchySerializer {
             val isInterface = stream.readInt() != 0
             val superClassIndex = stream.readInt()
             val interfaceStableNames = stream.readIntArray().map { stringTable[it] }
+            val interfaceVTableSize = stream.readInt()
+            val hasInterfaceTable = stream.readInt() != 0
             result.add(SerializedClassHierarchy(
                     classStableName = classStableName,
                     isInterface = isInterface,
                     superClassStableName = if (superClassIndex == INVALID_INDEX) null else stringTable[superClassIndex],
                     interfaceStableNames = interfaceStableNames,
+                    interfaceVTableSize = interfaceVTableSize,
+                    hasInterfaceTable = hasInterfaceTable,
             ))
         }
     }

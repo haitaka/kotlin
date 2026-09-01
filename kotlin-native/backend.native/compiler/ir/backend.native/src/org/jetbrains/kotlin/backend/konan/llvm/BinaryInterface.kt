@@ -40,6 +40,10 @@ object KonanBinaryInterface {
     internal const val MANGLE_FIELD_PREFIX = "kfield"
 
     internal const val MANGLE_CLASS_IDS_PREFIX = "kclassids"
+    internal const val MANGLE_IFACE_ID_PREFIX = "kifaceid"
+    internal const val MANGLE_ITABLE_PREFIX = "kifacetable"
+    internal const val MANGLE_ITABLE_RECORDS_PREFIX = "kifacerecords"
+    internal const val MANGLE_IFACE_VTABLE_PREFIX = "kifacevtable"
 
     private val mangler = object : AbstractKonanIrMangler(withReturnType = true, allowOutOfScopeTypeParameters = true) {}
 
@@ -149,13 +153,20 @@ fun IrClass.computeTypeInfoSymbolName() = with(KonanBinaryInterface) { typeInfoS
 
 fun IrClass.computePrivateTypeInfoSymbolName(containerName: String) = with(KonanBinaryInterface) { privateTypeInfoSymbolName(containerName) }.replaceSpecialSymbols()
 
-internal fun IrClass.classHierarchyIdsSymbolName(context: Context): String {
+/**
+ * The name identifying [this] class across the whole program, prefixed with [prefix] to tell apart the several
+ * global hierarchy symbols a class has. Unlike the type info symbol name, this one is stable enough to be
+ * computed by a compilation that only knows the class by name, from a cache of another one.
+ */
+internal fun IrClass.globalHierarchyName(context: Context): String {
     val containerName = if (isExported()) null else context.externalDeclarationFileNameProvider.getExternalDeclarationFileName(this)
     val fqName = fqNameForIrSerialization.toString()
-    return with (KonanBinaryInterface) {
-        withPrefix(MANGLE_CLASS_IDS_PREFIX, containerName?.plus(".$fqName") ?: fqName)
-    }.replaceSpecialSymbols()
+    return (containerName?.plus(".$fqName") ?: fqName).replaceSpecialSymbols()
 }
+
+/** The symbol of one of the global hierarchy structures of the class named [globalHierarchyName]. */
+internal fun globalHierarchySymbolName(globalHierarchyName: String, prefix: String): String =
+        with(KonanBinaryInterface) { withPrefix(prefix, globalHierarchyName) }
 
 /**
  * Delegates to different naming strategies depending on whether the function is exported or not.

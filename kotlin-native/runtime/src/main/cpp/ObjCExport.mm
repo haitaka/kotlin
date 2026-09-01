@@ -606,8 +606,10 @@ static void buildITable(TypeInfo* result, const std::map<ClassId, std::vector<VT
     itableSize = interfaceVTables.size();
 
   auto itable_ = konanAllocArray<InterfaceTableRecord>(itableSize);
-  result->interfaceTable_ = itable_;
-  result->interfaceTableSize_ = useFastITable ? itableSize - 1 : -itableSize;
+  auto table = konanAllocArray<InterfaceTable>(1);
+  table->size_ = useFastITable ? itableSize - 1 : -itableSize;
+  table->records_ = itable_;
+  result->interfaceTable_ = table;
 
   if (useFastITable) {
     for (auto& pair : interfaceVTables) {
@@ -700,8 +702,10 @@ static const TypeInfo* createTypeInfo(
   result->implementedInterfacesCount_ = implementedInterfaces.size();
   if (superItable != nullptr) {
     if (itableEqualsSuper) {
-      result->interfaceTableSize_ = superItableSize;
-      result->interfaceTable_ = superItable;
+      auto table = konanAllocArray<InterfaceTable>(1);
+      table->size_ = superItableSize;
+      table->records_ = superItable;
+      result->interfaceTable_ = table;
     } else {
       buildITable(result, interfaceVTables);
     }
@@ -824,9 +828,9 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
         superVtable + superVtableSize
   );
 
-  if (superITable == nullptr) {
-    superITable = superType->interfaceTable_;
-    superITableSize = superType->interfaceTableSize_;
+  if (superITable == nullptr && superType->interfaceTable_ != nullptr) {
+    superITable = superType->interfaceTable_->records_;
+    superITableSize = superType->interfaceTable_->size_;
   }
   std::map<ClassId, std::vector<VTableElement>> interfaceVTables;
   if (superITable != nullptr) {

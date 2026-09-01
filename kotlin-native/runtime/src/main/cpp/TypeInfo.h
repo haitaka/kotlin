@@ -83,6 +83,16 @@ struct InterfaceTableRecord {
     VTableElement const* vtable;
 };
 
+// The interface lookup table of a class. Its layout is decided by the compilation that produces the final
+// binary, as the interface ids it is keyed by are only known once the whole class hierarchy is there,
+// so a class coming from a cache merely refers to a table that the final compilation defines.
+struct InterfaceTable {
+    // The number of records minus one if they form a perfect hash table keyed by the interface id,
+    // or the negated number of records if they are sorted by the interface id instead.
+    int32_t size_;
+    InterfaceTableRecord const* records_;
+};
+
 struct ClassHierarchyIds {
     int32_t low_;
     int32_t high_;
@@ -112,8 +122,7 @@ struct TypeInfo {
     int32_t objOffsetsCount_;
     const TypeInfo* const* implementedInterfaces_;
     int32_t implementedInterfacesCount_;
-    int32_t interfaceTableSize_;
-    InterfaceTableRecord const* interfaceTable_;
+    InterfaceTable const* interfaceTable_;
 
     // String for the fully qualified dot-separated name of the package containing class.
     ObjHeader* packageName_;
