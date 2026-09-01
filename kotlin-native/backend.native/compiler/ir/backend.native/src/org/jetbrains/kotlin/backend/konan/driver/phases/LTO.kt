@@ -9,7 +9,6 @@ import org.jetbrains.kotlin.backend.common.phaser.KotlinBackendIrHolder
 import org.jetbrains.kotlin.backend.common.phaser.createSimpleNamedCompilerPhase
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultIrActions
-import org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysis
 import org.jetbrains.kotlin.backend.konan.ir.NewGHA
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.llvm.buildClassHierarchyRecords
@@ -21,13 +20,6 @@ import org.jetbrains.kotlin.backend.konan.optimizations.dce
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
-
-internal val GHAPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
-        name = "GHAPhase",
-        op = { generationState, irModule ->
-            GlobalHierarchyAnalysis(generationState.context, irModule).run()
-        }
-)
 
 internal val NewGHAPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
         name = "NewGHAPhase",

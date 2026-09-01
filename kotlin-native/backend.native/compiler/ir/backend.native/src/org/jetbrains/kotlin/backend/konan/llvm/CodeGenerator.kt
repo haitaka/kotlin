@@ -12,7 +12,6 @@ import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.RuntimeNames
 import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
 import org.jetbrains.kotlin.backend.konan.cgen.CBridgeOrigin
-import org.jetbrains.kotlin.backend.konan.ir.ClassGlobalHierarchyInfo
 import org.jetbrains.kotlin.backend.konan.ir.isAbstract
 import org.jetbrains.kotlin.backend.konan.llvm.ThreadState.Native
 import org.jetbrains.kotlin.backend.konan.llvm.ThreadState.Runnable
@@ -209,9 +208,8 @@ internal object VirtualTablesLookup {
      * knows it, so everyone else loads it from the global that compilation defines.
      */
     private fun FunctionGenerationContext.interfaceIdOf(irClass: IrClass): LLVMValueRef = when {
-        context.newGHAEnabled() ->
-            llvm.int32(context.newGHAResult.interfaceIds.getValue(irClass.classHierarchyStableName(context)))
-        context.shouldOptimize() ->
+        context.newGHAEnabled() -> llvm.int32(context.interfaceId(irClass))
+        context.hierarchyLaidOutByFinalLink ->
             load(llvm.int32Type, importGlobalHierarchyGlobal(irClass.interfaceIdSymbolName(context), llvm.int32Type))
         else -> llvm.int32(context.getLayoutBuilder(irClass).classId)
     }
@@ -227,15 +225,12 @@ internal object VirtualTablesLookup {
             return gep(runtime.interfaceTableRecordType, interfaceTable, interfaceTableIndex)
         }
 
-        val bitsPerColor = when {
-            context.ghaEnabled() -> context.globalHierarchyAnalysisResult.bitsPerColor
-            context.newGHAEnabled() -> context.newGHAResult.bitsPerColor
-            else -> null
-        }
+        // Known only where the colouring itself was computed; a cache has to test the shape at run time.
+        val bitsPerColor = if (context.newGHAEnabled()) context.newGHAResult.bitsPerColor else null
 
-        // See details in ClassLayoutBuilder.
+        // See details in NewGHA.
         return if (bitsPerColor != null
-                && bitsPerColor <= ClassGlobalHierarchyInfo.MAX_BITS_PER_COLOR
+                && bitsPerColor <= MAX_BITS_PER_COLOR
                 && context.config.produce != CompilerOutputKind.FRAMEWORK
         ) {
             // All interface tables are small and no unknown interface inheritance.
@@ -264,34 +259,32 @@ internal object VirtualTablesLookup {
         }
     }
 
-    fun FunctionGenerationContext.checkIsSubtype(objTypeInfo: LLVMValueRef, dstClass: IrClass) = if (!context.ghaEnabled()) {
-        when {
-            context.newGHAEnabled() && !dstClass.isInterface -> {
-                // The interval of the destination class is only known at the final link, so load it from its global.
-                val struct = importGlobal(dstClass.classHierarchyIdsStructName(context), runtime.classHierarchyIdsType, dstClass)
-                val classIdLo = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 0 /* classIdLo */))
-                val classIdHi = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 1 /* classIdHi */))
-                call(llvm.isSubclassFastNewFunction,
-                        listOf(objTypeInfo, classIdLo, classIdHi))
-            }
-            dstClass.isInterface && context.shouldOptimize() -> {
-                // Essentially: typeInfo.itable[place(interfaceId)].id == interfaceId
-                val interfaceId = interfaceIdOf(dstClass)
-                val interfaceTableRecord = getInterfaceTableRecord(objTypeInfo, interfaceId)
-                icmpEq(load(llvm.int32Type, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 0 /* id */)), interfaceId)
-            }
-            else -> call(llvm.isSubtypeFunction, listOf(objTypeInfo, codegen.typeInfoValue(dstClass)))
-        }
-    } else {
-        val dstHierarchyInfo = context.getLayoutBuilder(dstClass).hierarchyInfo
-        if (!dstClass.isInterface) {
-            call(llvm.isSubclassFastFunction,
-                    listOf(objTypeInfo, llvm.int32(dstHierarchyInfo.classIdLo), llvm.int32(dstHierarchyInfo.classIdHi)))
-        } else {
+    fun FunctionGenerationContext.checkIsSubtype(objTypeInfo: LLVMValueRef, dstClass: IrClass) = when {
+        // Without the optimizations no hierarchy analysis runs, so there is nothing to be fast about.
+        !context.shouldOptimize() -> call(llvm.isSubtypeFunction, listOf(objTypeInfo, codegen.typeInfoValue(dstClass)))
+
+        dstClass.isInterface -> {
             // Essentially: typeInfo.itable[place(interfaceId)].id == interfaceId
-            val interfaceId = llvm.int32(dstHierarchyInfo.interfaceId)
+            val interfaceId = interfaceIdOf(dstClass)
             val interfaceTableRecord = getInterfaceTableRecord(objTypeInfo, interfaceId)
             icmpEq(load(llvm.int32Type, structGep(runtime.interfaceTableRecordType, interfaceTableRecord, 0 /* id */)), interfaceId)
+        }
+
+        context.hierarchyLaidOutByFinalLink -> {
+            // Neither interval is known here: the destination's comes from its global, and the object's own
+            // one the runtime reads through the classHierarchyIds_ of its type info.
+            val struct = importGlobal(dstClass.classHierarchyIdsStructName(context), runtime.classHierarchyIdsType, dstClass)
+            val classIdLo = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 0 /* classIdLo */))
+            val classIdHi = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 1 /* classIdHi */))
+            call(llvm.isSubclassFastNewFunction, listOf(objTypeInfo, classIdLo, classIdHi))
+        }
+
+        else -> {
+            // The whole program is here: the destination's interval is a constant, and the object's own id sits
+            // right in its type info, so the check is a plain range test over one load.
+            val ids = context.classIds(dstClass)
+            call(llvm.isSubclassFastFunction,
+                    listOf(objTypeInfo, llvm.int32(ids.classIdLo), llvm.int32(ids.classIdHi)))
         }
     }
 

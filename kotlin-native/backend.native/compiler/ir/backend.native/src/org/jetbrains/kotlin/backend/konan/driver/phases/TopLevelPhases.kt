@@ -563,7 +563,6 @@ private fun PhaseEngine<NativeGenerationState>.runCodegen(module: IrModuleFragme
         runAndMeasurePhase(CoroutinesVarSpillingPhase, it)
     }
     runAndMeasurePhase(CreateLLVMDeclarationsPhase, module)
-    runAndMeasurePhase(GHAPhase, module, disable = true)
     runAndMeasurePhase(NewGHAPhase, module, disable = !optimize || context.config.produce.isCache)
     runAndMeasurePhase(BuildClassHierarchyCacheInfoPhase, module, disable = !optimize || !context.config.produce.isCache)
     runAndMeasurePhase(RTTIPhase, RTTIInput(module, dceResult))

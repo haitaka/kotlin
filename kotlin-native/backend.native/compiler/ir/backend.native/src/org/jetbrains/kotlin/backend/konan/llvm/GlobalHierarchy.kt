@@ -2,7 +2,8 @@ package org.jetbrains.kotlin.backend.konan.llvm
 
 import llvm.LLVMArrayType
 import org.jetbrains.kotlin.backend.konan.Context
-import org.jetbrains.kotlin.backend.konan.ir.ClassGlobalHierarchyInfo
+import org.jetbrains.kotlin.backend.konan.isCache
+import org.jetbrains.kotlin.backend.konan.ir.NewClassGHAInfo
 import org.jetbrains.kotlin.backend.konan.ir.NewInterfaceTableEntry
 import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.ir.isAbstract
@@ -15,6 +16,28 @@ import org.jetbrains.kotlin.ir.util.isInterface
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+
+// 32-items table seems like a good threshold.
+internal const val MAX_BITS_PER_COLOR = 5
+
+/**
+ * Whether the hierarchy structures this compilation refers to are laid out by another one — the compilation
+ * that produces the final binary. That is so for a cache, which cannot know the ids yet, and for a binary
+ * linking caches, whose numbering has to cover their classes too.
+ *
+ * When it is not so, this compilation sees the whole program and bakes every id right into the code it emits:
+ * no globals, and the interval of a class goes into the `classId_` of its type info as it always used to.
+ */
+internal val Context.hierarchyLaidOutByFinalLink: Boolean
+    get() = shouldOptimize() && (config.produce.isCache || config.cachedLibraries.hasStaticCaches)
+
+internal fun Context.interfaceId(irClass: IrClass): Int =
+        newGHAResult.interfaceIds.getValue(irClass.classHierarchyStableName(this))
+
+internal fun Context.classIds(irClass: IrClass): NewClassGHAInfo =
+        newGHAResult.classIds.getValue(irClass.classHierarchyStableName(this))
+
+internal fun Context.classIdLo(irClass: IrClass): Int = classIds(irClass).classIdLo
 
 /**
  * The name a class is known by in the class hierarchy. It is the key the hierarchy pieces of the separate
@@ -96,7 +119,7 @@ internal fun IrElement.buildClassHierarchyRecords(context: Context): List<Serial
  * coming from cached libraries are emitted here as well, as their caches only import them.
  */
 internal fun ContextUtils.createClassHierarchyIdsStructs() {
-    if (!context.newGHAEnabled()) return
+    if (!context.newGHAEnabled() || !context.hierarchyLaidOutByFinalLink) return
     for ([stableName, hierarchyInfo] in context.newGHAResult.classIds) {
         val global = createGlobalHierarchyGlobal(classHierarchyIdsSymbolName(stableName), runtime.classHierarchyIdsType)
         global.setInitializer(Struct(runtime.classHierarchyIdsType,
@@ -112,7 +135,7 @@ internal fun ContextUtils.createClassHierarchyIdsStructs() {
  * reaches them through these globals rather than through a constant of its own.
  */
 internal fun ContextUtils.createInterfaceIdGlobals() {
-    if (!context.newGHAEnabled()) return
+    if (!context.newGHAEnabled() || !context.hierarchyLaidOutByFinalLink) return
     for ([stableName, interfaceId] in context.newGHAResult.interfaceIds) {
         val global = createGlobalHierarchyGlobal(interfaceIdSymbolName(stableName), llvm.int32Type)
         global.setInitializer(llvm.constInt32(interfaceId))
@@ -127,7 +150,8 @@ internal fun ContextUtils.createInterfaceIdGlobals() {
  * the records point at are the other way around — a cache emits them for the classes it compiles.
  */
 internal fun ContextUtils.createInterfaceTables() {
-    if (!context.newGHAEnabled()) return
+    // With the whole program in one module every table was already emitted next to the type info using it.
+    if (!context.newGHAEnabled() || !context.hierarchyLaidOutByFinalLink) return
     context.newGHAResult.interfaceTables.forEach { [stableName, entries] -> createInterfaceTable(stableName, entries) }
 }
 
@@ -148,9 +172,21 @@ internal fun ContextUtils.createInterfaceTable(stableName: String, entries: List
     }
     val recordsPtr = staticData.placeGlobalConstArray(interfaceTableRecordsSymbolName(stableName),
             runtime.interfaceTableRecordType, records)
-    val table = createGlobalHierarchyGlobal(interfaceTableSymbolName(stableName), runtime.interfaceTableType)
-    table.setInitializer(Struct(runtime.interfaceTableType, llvm.constInt32(size), recordsPtr))
+    val initializer = Struct(runtime.interfaceTableType, llvm.constInt32(size), recordsPtr)
+    val symbolName = interfaceTableSymbolName(stableName)
+
+    if (!context.hierarchyLaidOutByFinalLink) {
+        // Nothing outside this module refers to the table, so let it be internalized and stripped as usual.
+        return staticData.placeGlobal(symbolName, initializer, isExported = false)
+                .also { it.setConstant(true) }.pointer
+    }
+
+    val table = createGlobalHierarchyGlobal(symbolName, runtime.interfaceTableType)
+    table.setInitializer(initializer)
     table.setConstant(true)
+    // Has to be llvm.used, not llvm.compiler.used: only the former is what the internalizer takes as evidence
+    // of a reference it cannot see, and internalizing a table the cached code refers to leaves that reference
+    // unresolved. The cost is that the linker may not strip the tables nothing turns out to refer to.
     llvm.usedGlobals += table.llvmGlobal
     return table.pointer
 }
@@ -172,7 +208,7 @@ private fun ContextUtils.interfaceVTable(classStableName: String, entry: NewInte
 internal fun <T> layOutInterfaceTable(entries: List<T>, interfaceId: (T) -> Int): Pair<List<T?>, Int> {
     // Find the optimal size. It must be a power of 2.
     var size = 1
-    val maxSize = 1 shl ClassGlobalHierarchyInfo.MAX_BITS_PER_COLOR
+    val maxSize = 1 shl MAX_BITS_PER_COLOR
     val used = BooleanArray(maxSize)
     while (size <= maxSize) {
         for (i in 0 until size)

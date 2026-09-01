@@ -237,8 +237,9 @@ internal class RTTIGenerator(
 
         val reflectionInfo = getReflectionInfo(irClass)
         val typeInfoGlobal = llvmDeclarations.typeInfoGlobal
-        // Without the optimizations the global hierarchy analysis doesn't run, so there are no class ids to point at.
-        val classHierarchyIds = if (irClass.isInterface || !context.shouldOptimize()) llvm.nullPointer else
+        // Only meaningful when another compilation lays the intervals out; otherwise classId_ carries this
+        // class's own interval, and without the optimizations there are no intervals at all.
+        val classHierarchyIds = if (irClass.isInterface || !context.hierarchyLaidOutByFinalLink) llvm.nullPointer else
                 constPointer(importGlobal(irClass.classHierarchyIdsStructName(context), runtime.classHierarchyIdsType, irClass))
         val typeInfo = TypeInfo(
                 irClass.typeInfoPtr,
@@ -311,7 +312,7 @@ internal class RTTIGenerator(
             )
         }
 
-        return if (context.shouldOptimize())
+        return if (context.hierarchyLaidOutByFinalLink)
             constPointer(importGlobal(irClass.interfaceTableSymbolName(context), runtime.interfaceTableType, irClass))
         else
             createInterfaceTable(irClass.classHierarchyStableName(context), entries)
@@ -350,7 +351,7 @@ internal class RTTIGenerator(
                 interfaceVTableSymbolName(irClass.classHierarchyStableName(context), iface.classHierarchyStableName(context)),
                 llvm.pointerType, vtableEntries,
                 // The table this vtable goes into is laid out by the compilation producing the final binary.
-                isExported = context.shouldOptimize(),
+                isExported = context.hierarchyLaidOutByFinalLink,
         )
     }
 
@@ -360,7 +361,7 @@ internal class RTTIGenerator(
 
         // Find the optimal size. It must be a power of 2.
         var size = 1
-        val maxSize = 1 shl ClassGlobalHierarchyInfo.MAX_BITS_PER_COLOR
+        val maxSize = 1 shl MAX_BITS_PER_COLOR
         val used = BooleanArray(maxSize)
         while (size <= maxSize) {
             for (i in 0 until size)
@@ -575,11 +576,6 @@ internal class RTTIGenerator(
         val typeInfoWithVtableType = llvm.structType(runtime.typeInfoType, vtable.llvmType)
         val typeInfoWithVtableGlobal = staticData.createGlobal(typeInfoWithVtableType, "", isExported = false)
         val result = typeInfoWithVtableGlobal.pointer.getElementPtr(llvm, typeInfoWithVtableType, 0)
-        val typeHierarchyInfo = if (!context.ghaEnabled())
-            ClassGlobalHierarchyInfo.DUMMY
-        else
-            ClassGlobalHierarchyInfo(-1, -1, 0)
-
         // TODO: interfaces (e.g. FunctionN and Function) should have different colors.
         val [interfaceTableSkeleton, interfaceTableSize] =
                 layOutInterfaceTable(interfaces.map { context.getLayoutBuilder(it) }) { it.classId }
@@ -613,7 +609,9 @@ internal class RTTIGenerator(
                 packageName = ReflectionInfo.EMPTY.packageName,
                 relativeName = ReflectionInfo.EMPTY.relativeName,
                 flags = flagsFromClass(irClass) or (if (immutable) TF_IMMUTABLE else 0),
-                classId = typeHierarchyInfo.classIdLo,
+                // These classes are not part of the recorded hierarchy; they derive from Any and nothing else,
+                // so they take Any's own interval start and no class type check but `is Any` accepts them.
+                classId = -1,
                 classHierarchyIds = llvm.nullPointer, // TODO
                 writableTypeInfo = writableTypeInfo,
                 associatedObjects = null,
