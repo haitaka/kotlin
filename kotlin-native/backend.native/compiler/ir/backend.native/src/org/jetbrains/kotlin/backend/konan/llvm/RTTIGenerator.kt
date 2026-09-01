@@ -305,7 +305,7 @@ internal class RTTIGenerator(
 
         val entries = irClass.implementedInterfaces.map { iface ->
             emitInterfaceVTable(irClass, iface)
-            NewInterfaceTableEntry(
+            InterfaceTableEntry(
                     interfaceStableName = iface.classHierarchyStableName(context),
                     interfaceId = context.getLayoutBuilder(iface).classId,
                     vtableSize = context.getLayoutBuilder(iface).interfaceVTableEntries.size,

@@ -36,14 +36,18 @@ KBoolean IsSubtype(const TypeInfo* obj_type_info, const TypeInfo* type_info) {
   return obj_type_info != nullptr;
 }
 
+// Used when the whole program was compiled at once, so that every interval was known where the type info
+// of the class was emitted.
 KBoolean IsSubclassFast(const TypeInfo* obj_type_info, int32_t lo, int32_t hi) {
   // Super type's interval should contain our interval.
   return obj_type_info->classId_ >= lo && obj_type_info->classId_ <= hi;
 }
 
-KBoolean IsSubclassFastNew(const TypeInfo* obj_type_info, int32_t lo, int32_t hi) {
+// Used when the intervals were only known to the compilation that produced the final binary, and so had to be
+// reached through globals it defines: one extra load, which no optimizer can fold away as the object's own
+// class is not known at the check site.
+KBoolean IsSubclassFastIndirect(const TypeInfo* obj_type_info, int32_t lo, int32_t hi) {
   // Super type's interval should contain our interval.
-    // TODO
   return obj_type_info->classHierarchyIds_->low_ >= lo && obj_type_info->classHierarchyIds_->low_ <= hi;
 }
 

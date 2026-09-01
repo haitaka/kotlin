@@ -9,7 +9,7 @@ import org.jetbrains.kotlin.backend.common.phaser.KotlinBackendIrHolder
 import org.jetbrains.kotlin.backend.common.phaser.createSimpleNamedCompilerPhase
 import org.jetbrains.kotlin.backend.konan.NativeGenerationState
 import org.jetbrains.kotlin.backend.konan.driver.utilities.getDefaultIrActions
-import org.jetbrains.kotlin.backend.konan.ir.NewGHA
+import org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysis
 import org.jetbrains.kotlin.backend.konan.llvm.Lifetime
 import org.jetbrains.kotlin.backend.konan.llvm.buildClassHierarchyRecords
 import org.jetbrains.kotlin.backend.konan.optimizations.*
@@ -21,16 +21,16 @@ import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 
-internal val NewGHAPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
-        name = "NewGHAPhase",
+internal val GlobalHierarchyAnalysisPhase = createSimpleNamedCompilerPhase<NativeGenerationState, IrModuleFragment>(
+        name = "GlobalHierarchyAnalysis",
         op = { generationState, irModule ->
-            NewGHA(generationState, irModule).run()
+            GlobalHierarchyAnalysis(generationState, irModule).run()
         }
 )
 
 /**
  * Records the piece of the class hierarchy that this cache contributes, so that the compilation that links
- * against the cache can assemble the whole hierarchy in [NewGHAPhase]. The two phases are complementary:
+ * against the cache can assemble the whole hierarchy in [GlobalHierarchyAnalysisPhase]. The two phases are complementary:
  * a cache contributes its piece, a final binary consumes all the pieces.
  *
  * Runs after the lowerings on purpose: the classes declared inside function bodies are only visible here,

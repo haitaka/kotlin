@@ -1,10 +1,15 @@
+/*
+ * Copyright 2010-2026 JetBrains s.r.o. and Kotlin Programming Language contributors.
+ * Use of this source code is governed by the Apache 2.0 license that can be found in the license/LICENSE.txt file.
+ */
+
 package org.jetbrains.kotlin.backend.konan.llvm
 
 import llvm.LLVMArrayType
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.isCache
-import org.jetbrains.kotlin.backend.konan.ir.NewClassGHAInfo
-import org.jetbrains.kotlin.backend.konan.ir.NewInterfaceTableEntry
+import org.jetbrains.kotlin.backend.konan.ir.ClassIdInterval
+import org.jetbrains.kotlin.backend.konan.ir.InterfaceTableEntry
 import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.ir.isAbstract
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
@@ -32,10 +37,10 @@ internal val Context.hierarchyLaidOutByFinalLink: Boolean
     get() = shouldOptimize() && (config.produce.isCache || config.cachedLibraries.hasStaticCaches)
 
 internal fun Context.interfaceId(irClass: IrClass): Int =
-        newGHAResult.interfaceIds.getValue(irClass.classHierarchyStableName(this))
+        globalHierarchyAnalysisResult.interfaceIds.getValue(irClass.classHierarchyStableName(this))
 
-internal fun Context.classIds(irClass: IrClass): NewClassGHAInfo =
-        newGHAResult.classIds.getValue(irClass.classHierarchyStableName(this))
+internal fun Context.classIds(irClass: IrClass): ClassIdInterval =
+        globalHierarchyAnalysisResult.classIds.getValue(irClass.classHierarchyStableName(this))
 
 internal fun Context.classIdLo(irClass: IrClass): Int = classIds(irClass).classIdLo
 
@@ -119,8 +124,8 @@ internal fun IrElement.buildClassHierarchyRecords(context: Context): List<Serial
  * coming from cached libraries are emitted here as well, as their caches only import them.
  */
 internal fun ContextUtils.createClassHierarchyIdsStructs() {
-    if (!context.newGHAEnabled() || !context.hierarchyLaidOutByFinalLink) return
-    for ([stableName, hierarchyInfo] in context.newGHAResult.classIds) {
+    if (!context.hasGlobalHierarchyAnalysis() || !context.hierarchyLaidOutByFinalLink) return
+    for ([stableName, hierarchyInfo] in context.globalHierarchyAnalysisResult.classIds) {
         val global = createGlobalHierarchyGlobal(classHierarchyIdsSymbolName(stableName), runtime.classHierarchyIdsType)
         global.setInitializer(Struct(runtime.classHierarchyIdsType,
                 llvm.constInt32(hierarchyInfo.classIdLo), llvm.constInt32(hierarchyInfo.classIdHi)))
@@ -135,8 +140,8 @@ internal fun ContextUtils.createClassHierarchyIdsStructs() {
  * reaches them through these globals rather than through a constant of its own.
  */
 internal fun ContextUtils.createInterfaceIdGlobals() {
-    if (!context.newGHAEnabled() || !context.hierarchyLaidOutByFinalLink) return
-    for ([stableName, interfaceId] in context.newGHAResult.interfaceIds) {
+    if (!context.hasGlobalHierarchyAnalysis() || !context.hierarchyLaidOutByFinalLink) return
+    for ([stableName, interfaceId] in context.globalHierarchyAnalysisResult.interfaceIds) {
         val global = createGlobalHierarchyGlobal(interfaceIdSymbolName(stableName), llvm.int32Type)
         global.setInitializer(llvm.constInt32(interfaceId))
         global.setConstant(true)
@@ -151,8 +156,8 @@ internal fun ContextUtils.createInterfaceIdGlobals() {
  */
 internal fun ContextUtils.createInterfaceTables() {
     // With the whole program in one module every table was already emitted next to the type info using it.
-    if (!context.newGHAEnabled() || !context.hierarchyLaidOutByFinalLink) return
-    context.newGHAResult.interfaceTables.forEach { [stableName, entries] -> createInterfaceTable(stableName, entries) }
+    if (!context.hasGlobalHierarchyAnalysis() || !context.hierarchyLaidOutByFinalLink) return
+    context.globalHierarchyAnalysisResult.interfaceTables.forEach { [stableName, entries] -> createInterfaceTable(stableName, entries) }
 }
 
 /**
@@ -160,7 +165,7 @@ internal fun ContextUtils.createInterfaceTables() {
  * compilation of that class emitted: already defined here if that is this very compilation, imported from
  * its cache otherwise.
  */
-internal fun ContextUtils.createInterfaceTable(stableName: String, entries: List<NewInterfaceTableEntry>): ConstPointer {
+internal fun ContextUtils.createInterfaceTable(stableName: String, entries: List<InterfaceTableEntry>): ConstPointer {
     val [slots, size] = layOutInterfaceTable(entries) { it.interfaceId }
     val records = slots.map { entry ->
         // kInvalidInterfaceId is zero, and the ids are numerated from one, so an empty slot holds zeroes.
@@ -191,7 +196,7 @@ internal fun ContextUtils.createInterfaceTable(stableName: String, entries: List
     return table.pointer
 }
 
-private fun ContextUtils.interfaceVTable(classStableName: String, entry: NewInterfaceTableEntry): ConstPointer {
+private fun ContextUtils.interfaceVTable(classStableName: String, entry: InterfaceTableEntry): ConstPointer {
     // An interface with no methods of its own has no vtable to point at, and no call can ever reach for one.
     if (entry.vtableSize == 0) return llvm.nullPointer
     val symbolName = interfaceVTableSymbolName(classStableName, entry.interfaceStableName)
@@ -203,7 +208,7 @@ private fun ContextUtils.interfaceVTable(classStableName: String, entry: NewInte
  * Places [entries] into the slots of an interface lookup table: a perfect hash table keyed by the color bits of
  * the interface ids when they fit into one, and a table sorted by the interface id otherwise. Returns the slots
  * along with the size to record in the table: the mask for the former shape, the negated count for the latter.
- * The details of the scheme are in [org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysis].
+ * The details of the scheme are on [org.jetbrains.kotlin.backend.konan.ir.GlobalHierarchyAnalysis].
  */
 internal fun <T> layOutInterfaceTable(entries: List<T>, interfaceId: (T) -> Int): Pair<List<T?>, Int> {
     // Find the optimal size. It must be a power of 2.

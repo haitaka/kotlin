@@ -108,7 +108,7 @@ internal class Context(
         }
     }
 
-    lateinit var newGHAResult: NewGHAResult
+    lateinit var globalHierarchyAnalysisResult: GlobalHierarchyAnalysisResult
 
     override val typeSystem: IrTypeSystemContext
         get() = IrTypeSystemContextImpl(irBuiltIns)
@@ -117,7 +117,7 @@ internal class Context(
     var objCExportedInterface: ObjCExportedInterface? = null
     var objCExportCodeSpec: ObjCExportCodeSpec? = null
 
-    fun newGHAEnabled() = ::newGHAResult.isInitialized
+    fun hasGlobalHierarchyAnalysis() = ::globalHierarchyAnalysisResult.isInitialized
 
     @OptIn(K1Deprecation::class)
     val stdlibModule

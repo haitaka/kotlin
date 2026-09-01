@@ -98,31 +98,66 @@ internal class OverriddenFunctionInfo(
     }
 }
 
-internal data class NewClassGHAInfo(val classIdLo: Int, val classIdHi: Int)
+internal data class ClassIdInterval(val classIdLo: Int, val classIdHi: Int)
 
 /**
- * The ids [NewGHA] computed for the whole program, keyed by the stable names of the classes and interfaces.
+ * The ids [GlobalHierarchyAnalysis] computed for the whole program, keyed by the stable names of the classes and interfaces.
  *
  * A class is identified by the interval of its subtree, so a check against it is a range check; an interface
  * is identified by a single colored id, so a check against it is a lookup in the itable of the object's class.
  */
 /** One entry of the interface lookup table of a class: the interface, its id and the size of its vtable. */
-internal class NewInterfaceTableEntry(
+internal class InterfaceTableEntry(
         val interfaceStableName: String,
         val interfaceId: Int,
         val vtableSize: Int,
 )
 
-internal class NewGHAResult(
-        val classIds: Map<String, NewClassGHAInfo>,
+internal class GlobalHierarchyAnalysisResult(
+        val classIds: Map<String, ClassIdInterval>,
         val interfaceIds: Map<String, Int>,
         /** The entries of the interface lookup table of every class that owns one, keyed by its stable name. */
-        val interfaceTables: Map<String, List<NewInterfaceTableEntry>>,
+        val interfaceTables: Map<String, List<InterfaceTableEntry>>,
         /** How many lower bits of an interface id hold its color, and thus how large the itables have to be. */
         val bitsPerColor: Int,
 )
 
-internal class NewGHA(val generationState: NativeGenerationState, val irModule: IrModuleFragment) {
+/**
+ * Numbers the classes and the interfaces of the whole program, so that a type check becomes a range test and
+ * an interface lookup a single indexed load. The pieces the caches contributed are already part of [hierarchy],
+ * which is why the numbering can only happen in the compilation that produces the final binary.
+ *
+ * Here's the explanation of what's happening here:
+ * Given a tree we can traverse it with the DFS and save for each vertex two times:
+ * the enter time (the first time we saw this vertex) and the exit time (the last time we saw it).
+ * It turns out that if we assign then for each vertex the interval (enterTime, exitTime),
+ * then the following claim holds for any two vertices v and w:
+ * ----- v is ancestor of w iff interval(v) contains interval(w) ------
+ * Now apply this idea to the classes hierarchy tree and we'll get a fast type check.
+ *
+ * And one more observation: for each pair of intervals they either don't intersect or
+ * one contains the other. With that in mind, we can save in a type info only one end of an interval.
+ *
+ * The algorithm for fast interface call and check:
+ * Consider the following graph: the vertices are interfaces and two interfaces are
+ * connected with an edge if there exists a class which inherits both of them.
+ * Now find a proper vertex-coloring of that graph (such that no edge connects vertices of same color).
+ * Assign to each interface a unique id in such a way that its color is stored in the lower bits of its id.
+ * Assuming the number of colors used is reasonably small build then a perfect hash table for each class:
+ *     for each interfaceId inherited: itable[interfaceId % size] == interfaceId
+ * Since we store the color in the lower bits the division can be replaced with (interfaceId & (size - 1)).
+ * This is indeed a perfect hash table by construction of the coloring of the interface graph.
+ * Now to perform an interface call store in all itables pointers to vtables of that particular interface.
+ * Interface call: *(itable[interfaceId & (size - 1)].vtable[methodIndex])(...)
+ * Interface check: itable[interfaceId & (size - 1)].id == interfaceId
+ *
+ * Note that we have a fallback to a more conservative version if the size of an itable is too large:
+ * just save all interface ids and vtables in sorted order and find the needed one with the binary search.
+ * We can signal that using the sign bit of the size field of the interface table:
+ *     if (size >= 0) { .. fast path .. }
+ *     else binary_search(0, -size)
+ */
+internal class GlobalHierarchyAnalysis(val generationState: NativeGenerationState, val irModule: IrModuleFragment) {
     private val context = generationState.context
 
     fun run() {
@@ -139,7 +174,7 @@ internal class NewGHA(val generationState: NativeGenerationState, val irModule: 
                 anyName = context.irBuiltIns.anyClass.owner.classHierarchyStableName(context),
         )
 
-        val classIds = mutableMapOf<String, NewClassGHAInfo>()
+        val classIds = mutableMapOf<String, ClassIdInterval>()
         var time = 0
         // Only the classes take part in the traversal: the intervals are a single inheritance numbering,
         // and the interfaces are numbered by the coloring below instead.
@@ -149,7 +184,7 @@ internal class NewGHA(val generationState: NativeGenerationState, val irModule: 
             val enterTime = if (classEntry == hierarchy.any) -1 else time
             hierarchy.directSubtypes(classEntry).forEach { if (!it.isInterface) dfs(it) }
             val exitTime = time
-            classIds[classEntry.name] = NewClassGHAInfo(enterTime, exitTime)
+            classIds[classEntry.name] = ClassIdInterval(enterTime, exitTime)
         }
 
         dfs(hierarchy.any)
@@ -176,18 +211,18 @@ internal class NewGHA(val generationState: NativeGenerationState, val irModule: 
         // The layout of an interface table is keyed by the ids above, so it can only be decided here, once.
         val interfaceTables = hierarchy.entries.filter { it.hasInterfaceTable }.associate { entry ->
             entry.name to hierarchy.allSupertypes(entry).filter { it.isInterface }.map {
-                NewInterfaceTableEntry(it.name, interfaceIds.getValue(it.name), it.interfaceVTableSize)
+                InterfaceTableEntry(it.name, interfaceIds.getValue(it.name), it.interfaceVTableSize)
             }
         }
 
-        context.newGHAResult = NewGHAResult(classIds, interfaceIds, interfaceTables, bitsPerColor)
+        context.globalHierarchyAnalysisResult = GlobalHierarchyAnalysisResult(classIds, interfaceIds, interfaceTables, bitsPerColor)
     }
 
     /**
      * A proper coloring of the graph whose vertices are the interfaces of the program and whose edges connect
      * the interfaces implemented by one and the same class. Storing the color in the lower bits of an interface
-     * id then makes `itable[interfaceId & (itableSize - 1)]` a perfect hash table; see [GlobalHierarchyAnalysis]
-     * for the full explanation of the scheme.
+     * id then makes `itable[interfaceId & (itableSize - 1)]` a perfect hash table; the full explanation of
+     * the scheme is on [GlobalHierarchyAnalysis].
      */
     private fun colorInterfaces(hierarchy: ClassHierarchy): Map<ClassHierarchy.ClassEntry, Int> {
         val interfaces = hierarchy.entries.filter { it.isInterface }
@@ -370,12 +405,12 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
         // Only the compilation that lays out the whole hierarchy knows the interface ids; the others reach
         // them through the [interfaceIdSymbolName] globals, and never need a constant of their own.
         irClass.isInterface -> when {
-            context.newGHAEnabled() -> context.interfaceId(irClass)
+            context.hasGlobalHierarchyAnalysis() -> context.interfaceId(irClass)
             else -> localHash(irClass.fqNameForIrSerialization.asString().toByteArray()).toInt()
         }
         // The object side of a class type check reads this field. A compilation whose hierarchy structures the
         // final link lays out cannot know the interval, and leaves the check to classHierarchyIds_ instead.
-        context.newGHAEnabled() && !context.hierarchyLaidOutByFinalLink -> context.classIdLo(irClass)
+        context.hasGlobalHierarchyAnalysis() && !context.hierarchyLaidOutByFinalLink -> context.classIdLo(irClass)
         else -> 0
     }
 

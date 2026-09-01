@@ -428,7 +428,7 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     val lookupInterfaceTableRecord = importRtFunction("LookupInterfaceTableRecord", false)
     val isSubtypeFunction = importRtFunction("IsSubtype", false)
     val isSubclassFastFunction = importRtFunction("IsSubclassFast", false)
-    val isSubclassFastNewFunction = importRtFunction("IsSubclassFastNew", false)
+    val isSubclassFastIndirectFunction = importRtFunction("IsSubclassFastIndirect", false)
     val getTypeInfo = importRtFunction("Kotlin_Any_getTypeInfo", false)
     val throwExceptionFunction = importRtFunction("ThrowException", false)
     val appendToInitalizersTail = importRtFunction("AppendToInitializersTail", false)

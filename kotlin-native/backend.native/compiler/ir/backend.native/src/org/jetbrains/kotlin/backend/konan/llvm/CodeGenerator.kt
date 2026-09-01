@@ -208,7 +208,7 @@ internal object VirtualTablesLookup {
      * knows it, so everyone else loads it from the global that compilation defines.
      */
     private fun FunctionGenerationContext.interfaceIdOf(irClass: IrClass): LLVMValueRef = when {
-        context.newGHAEnabled() -> llvm.int32(context.interfaceId(irClass))
+        context.hasGlobalHierarchyAnalysis() -> llvm.int32(context.interfaceId(irClass))
         context.hierarchyLaidOutByFinalLink ->
             load(llvm.int32Type, importGlobalHierarchyGlobal(irClass.interfaceIdSymbolName(context), llvm.int32Type))
         else -> llvm.int32(context.getLayoutBuilder(irClass).classId)
@@ -226,9 +226,9 @@ internal object VirtualTablesLookup {
         }
 
         // Known only where the colouring itself was computed; a cache has to test the shape at run time.
-        val bitsPerColor = if (context.newGHAEnabled()) context.newGHAResult.bitsPerColor else null
+        val bitsPerColor = if (context.hasGlobalHierarchyAnalysis()) context.globalHierarchyAnalysisResult.bitsPerColor else null
 
-        // See details in NewGHA.
+        // See the explanation of the scheme on GlobalHierarchyAnalysis.
         return if (bitsPerColor != null
                 && bitsPerColor <= MAX_BITS_PER_COLOR
                 && context.config.produce != CompilerOutputKind.FRAMEWORK
@@ -276,7 +276,7 @@ internal object VirtualTablesLookup {
             val struct = importGlobal(dstClass.classHierarchyIdsStructName(context), runtime.classHierarchyIdsType, dstClass)
             val classIdLo = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 0 /* classIdLo */))
             val classIdHi = load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, struct, 1 /* classIdHi */))
-            call(llvm.isSubclassFastNewFunction, listOf(objTypeInfo, classIdLo, classIdHi))
+            call(llvm.isSubclassFastIndirectFunction, listOf(objTypeInfo, classIdLo, classIdHi))
         }
 
         else -> {

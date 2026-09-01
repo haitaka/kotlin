@@ -56,7 +56,7 @@ touchFunction(CheckCurrentFrame)
 touchFunction(LookupInterfaceTableRecord)
 touchFunction(IsSubtype)
 touchFunction(IsSubclassFast)
-touchFunction(IsSubclassFastNew)
+touchFunction(IsSubclassFastIndirect)
 touchFunction(Kotlin_Any_getTypeInfo)
 
 touchFunction(ThrowException)
