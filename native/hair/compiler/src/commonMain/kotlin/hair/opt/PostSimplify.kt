@@ -38,7 +38,7 @@ fun Session.simplify(): Boolean {
                         val reachablePreds = node.preds.withIndex().filter { it.index !in unreachablePredIndexes }.map { it.value }.toTypedArray()
                         val replacement = BlockEntry(*reachablePreds)
                         for (phi in node.phies.toList()) {
-                            phi.replaceValueUsesAndKill(Phi(replacement, *phi.valuesAtExits.toTypedArray()))
+                            phi.replaceUsesAndKill(Phi(replacement, *phi.valuesAtExits.toTypedArray()))
                         }
 
                         return replacement
@@ -106,7 +106,7 @@ fun Session.simplify(): Boolean {
         }
 
         for (node in allNodes().toList()) {
-            if (!node.registered) continue
+            if (!node.inGraph) continue
             node.accept(simplifier)
         }
     }

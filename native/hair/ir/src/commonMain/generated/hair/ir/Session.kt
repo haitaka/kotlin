@@ -1,9 +1,8 @@
 package hair.ir
 
 import hair.ir.nodes.*
-import hair.sym.*
 
-open class Session: SessionBase() {
+abstract class Session : SessionBase() {
     // Simple forms
 
     internal val useForm = Use.form(this).also { register(it) }
@@ -137,10 +136,9 @@ open class Session: SessionBase() {
     internal val invokeVirtualMetaForm = InvokeVirtual.metaForm(this)
 
     
+    val entry by lazy { BlockEntry(blockEntryForm).also{ wireToGraph(gvn(it)) } }
 
-    val entry by lazy { BlockEntry(blockEntryForm).also{ register(gvn(it)) } }
-
-    val unreachable by lazy { Unreachable(unreachableForm).also{ register(gvn(it)) } }
+    val unreachable by lazy { Unreachable(unreachableForm).also{ wireToGraph(gvn(it)) } }
 
 }
 

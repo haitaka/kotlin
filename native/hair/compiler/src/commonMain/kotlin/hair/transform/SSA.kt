@@ -84,7 +84,7 @@ fun Session.buildSSA() {
         for (placeholder in allNodes().filterIsInstance<PhiPlaceholder>().toList()) {
             // TODO use Phi builder
             val phi = Phi(placeholder.block, *placeholder.joinedValues.toTypedArray())
-            placeholder.replaceValueUsesAndKill(phi)
+            placeholder.replaceUsesAndKill(phi)
         }
     }
 

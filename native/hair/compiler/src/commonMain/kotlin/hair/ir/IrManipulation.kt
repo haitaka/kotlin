@@ -11,27 +11,17 @@ fun interface OnNodeBuilt {
 }
 
 class SessionImpl: Session() {
-    // FIXME try to remove?
-    val rawNodeBuilder: NodeBuilder = object : NodeBuilder {
-        override val session: Session
-            get() = this@SessionImpl
-        override fun onNodeBuilt(node: Node): Node = node
-    }
-
     val nodeBuilder: NodeBuilder = WiringUpNodeBuilder(this)
 
     val argUpdater: ArgumentUpdater = ArgumentUpdaterImpl(this)
     val normalization = Normalization(this)
 
-    fun wireUp(node: Node): Node {
-        // TODO rewrite
-        val normal = normalization.normalize(node)
-        val replacement = gvn(normal)
-        // TODO rename registered
-        if (!replacement.registered) register(replacement)
-        require(replacement.registered)
-        return onNodeBuilt.onNodeBuilt(replacement)
-    }
+    /** Adds the node to tha graph in its canonical form with uses wired */
+    fun wireUp(node: Node): Node = node
+        .let { normalization.normalize(it) }
+        .let { gvn(it) }
+        .also { wireToGraph(it) }
+        .let { onNodeBuilt.onNodeBuilt(it) }
 
     private var onNodeBuilt: OnNodeBuilt = OnNodeBuilt { it }
 
@@ -50,8 +40,6 @@ class WiringUpNodeBuilder internal constructor(override val session: SessionImpl
     override fun onNodeBuilt(node: Node): Node = session.wireUp(node)
 }
 
-val Session.rawNodeBuilder get() = (this as SessionImpl).rawNodeBuilder
-
 val Session.nodeBuilder get() = (this as SessionImpl).nodeBuilder
 val Session.argUpdater get() = (this as SessionImpl).argUpdater
 val Session.normalization get() = (this as SessionImpl).normalization
@@ -61,20 +49,12 @@ class ArgumentUpdaterImpl(val session: SessionImpl) : ArgumentUpdater {
         require(newValue != oldValue)
         oldValue?.removeUse(node)
         if (newValue != null) {
-            // FIXME maybe simplify?
-            val normal = session.normalization.normalize(node)
-            val replacement: Node = if (normal != node) {
-                normal
-            } else {
-                session.gvn(normal)
-            }
+            val replacement = node
+                .let { session.normalization.normalize(it) }
+                .let { session.gvn(it) }
 
             if (replacement != node) {
-                // FIXME introduce common tool
-                (node as? Controlling)?.nextOrNull?.let {
-                    it.control = normal as Controlling
-                }
-                node.replaceValueUsesAndKill(replacement)
+                node.replaceUsesAndKill(replacement)
             } else {
                 newValue.addUse(replacement)
             }
@@ -85,7 +65,7 @@ class ArgumentUpdaterImpl(val session: SessionImpl) : ArgumentUpdater {
 fun <T> Session.withOnNodeBuiltHandler(onNodeBuiltProvider: (OnNodeBuilt) -> OnNodeBuilt, block: () -> T): T =
     (this as SessionImpl).withOnNodeBuiltHandler(onNodeBuiltProvider, block)
 
-fun <T> Session.observingNodesBuilt(observer: (Node) -> Unit, block: () -> T): T = withOnNodeBuiltHandler(
+fun <T> Session.observingBuiltNodes(observer: (Node) -> Unit, block: () -> T): T = withOnNodeBuiltHandler(
     { outer ->
         { node -> outer.onNodeBuilt(node).also { observer(it) } }
     },
@@ -125,13 +105,6 @@ fun <T> Session.modifyControlFlow(
             verify()
         }
     }
-}
-
-// TODO require cfg modificator
-context(_: ArgumentUpdater)
-fun Controlled.eraseControl() {
-    // FIXME use controlIndex or something
-    args.erase(0)
 }
 
 // TODO move into control manipulator
@@ -196,11 +169,31 @@ context(_: ArgumentUpdater)
 fun Node.kill() {
     require(uses.isEmpty())
     args.withIndex().forEach { [index, _] -> args[index] = null }
-    deregister()
+    unwireFromGraphAndDeregister()
+}
+
+context(argUpdater: ArgumentUpdater)
+private fun Controlled.setPrev(prev: Controlling) = with(argUpdater) {
+    control = prev
 }
 
 context(_: ArgumentUpdater)
-fun Node.replaceValueUsesAndKill(replacement: Node) {
-    replaceValueUses(replacement)
+fun Node.replaceUsesAndKill(replacement: Node) = when (this) {
+    is Controlling -> replaceUsesAndKill(replacement, replacement as Controlling)
+    else -> {
+        replaceValueUses(replacement)
+        kill()
+    }
+}
+
+context(_: ArgumentUpdater)
+fun Controlling.replaceUsesAndKill(valueReplacement: Node, controlReplacement: Controlling) {
+    nextOrNull?.setPrev(controlReplacement)
+    replaceValueUses(valueReplacement)
     kill()
+}
+
+context(_: ArgumentUpdater)
+fun BlockBody.replaceValueUsesAndKill(replacement: Node) {
+    replaceUsesAndKill(replacement, control)
 }

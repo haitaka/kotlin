@@ -146,7 +146,7 @@ fun tryCatch(
     // FIXME provide better accessor?
     val session = nodeBuilder.session
 
-    val [tryExit, tryResult] = session.observingNodesBuilt(
+    val [tryExit, tryResult] = session.observingBuiltNodes(
         { if (it is Throwing) throwers += it },
         {
             val result = tryBody()

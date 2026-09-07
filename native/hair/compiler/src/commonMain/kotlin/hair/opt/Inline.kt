@@ -32,13 +32,13 @@ fun Compilation.inline(call: InvokeStatic) {
 
             val exits = returns.map { it.first }.toTypedArray()
             val resultBlock = BlockEntry(*exits)
-            call.next.control = resultBlock
             if (returns.any { it.second != null }) {
-                call.replaceValueUsesAndKill(
+                call.replaceUsesAndKill(
                     Phi(
                         resultBlock,
                         *returns.map { it.first to it.second!! }.toTypedArray()
-                    )
+                    ),
+                    resultBlock
                 )
             }
         }

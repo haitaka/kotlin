@@ -50,7 +50,7 @@ class Generator(private val generationPath: File) {
             appendLine("import hair.sym.*")
             appendLine()
             appendLine(
-                renderClass(name = session, superClass = sessionBase()) {
+                renderClass(modifiers = listOf("abstract"), name = session, superClass = sessionBase()) {
                     member("// Simple forms")
                     for (node in sessionForms) {
                         member("internal val ${formNameInSession(node)} = ${refName(node)}.form(this).also { register(it) }")
@@ -62,8 +62,8 @@ class Generator(private val generationPath: File) {
                     }
                     blankLine()
                     // FIXME gvn result is always the same just add node into lists
-                    member("val entry by lazy { ${ControlFlow.blockEntry.name}(${formNameInSession(ControlFlow.blockEntry)}).also{ register(gvn(it)) } }")
-                    member("val unreachable by lazy { ${ControlFlow.unreachable.name}(${formNameInSession(ControlFlow.unreachable)}).also{ register(gvn(it)) } }")
+                    member("val entry by lazy { ${ControlFlow.blockEntry.name}(${formNameInSession(ControlFlow.blockEntry)}).also{ wireUses(gvn(it)) } }")
+                    member("val unreachable by lazy { ${ControlFlow.unreachable.name}(${formNameInSession(ControlFlow.unreachable)}).also{ wireUses(gvn(it)) } }")
                 }
             )
         })

@@ -1,10 +1,7 @@
 package hair.ir.nodes
 
 import hair.ir.NodeVisitor
-import hair.ir.Session
 import hair.sym.HairType
-import kotlin.collections.plus
-import kotlin.collections.remove
 
 interface Node {
     // structure
@@ -17,7 +14,7 @@ interface Node {
     // derived
     val uses: Sequence<Node>
 
-    val registered: Boolean
+    val inGraph: Boolean
 
     fun ensureUnique(): Node = form.ensureUnique(this)
 
@@ -48,7 +45,7 @@ sealed class NodeBase(final override val form: Form, args: List<Node?>) : Node {
 
     final override fun toString() = "$id = ${form.fullName}(${args.joinToString(", ") { it?.id.toString() }})"
 
-    final override val registered: Boolean
+    final override val inGraph: Boolean
         get() = id > 0
 
     override fun addUse(use: Node) {

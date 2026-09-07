@@ -213,6 +213,7 @@ internal class HairGenerator(val context: NativeBackendContext, val module: IrMo
                                         ArrayOp.SET_UNCHECKED -> {
                                             val elementType = function.parameters.last().type.asHairType()
                                             StoreArrayElement(elementType)(args[0], args[1], args[2])
+                                            UnitValue()
                                         }
                                         ArrayOp.SIZE -> ArraySize(args[0])
                                     }
