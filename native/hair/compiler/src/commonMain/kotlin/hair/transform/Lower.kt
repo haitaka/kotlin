@@ -59,12 +59,12 @@ fun Session.lower() {
                                 TypeInfo(node.obj),
                                 ConstTypeInfo(node.targetType)
                             )
-                            node.replaceUsesAndKill(replacement)
+                            node.replaceWith(replacement)
                         }
 
                         override fun visitCheckCast(node: CheckCast) {
                             // TODO strike out?
-                            node.replaceUsesAndKill(node.obj, node.control)
+                            node.spliceOut(node.obj)
                         }
 
                         override fun visitArrayIndexCheck(node: ArrayIndexCheck) {
