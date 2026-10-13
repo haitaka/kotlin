@@ -334,10 +334,7 @@ internal class HairGenerator(val context: NativeBackendContext, val module: IrMo
                         BlockEntry(falseExit, *breakExits.toTypedArray())
 
                         val continueExits = loopContinues[loop] ?: mutableListOf()
-                        if (continueExits.isNotEmpty()) {
-                            val preds = condBlock.preds + continueExits
-                            condBlock.replaceArgs(preds.toTypedArray())
-                        }
+                        condBlock.addPreds(*continueExits.toTypedArray())
 
                         return unitConst
                     }
@@ -358,10 +355,7 @@ internal class HairGenerator(val context: NativeBackendContext, val module: IrMo
                         val exitBlock = BlockEntry(falseExit, *breakExits.toTypedArray())
 
                         val continueExits = loopContinues[loop] ?: mutableListOf()
-                        if (continueExits.isNotEmpty()) {
-                            val preds = entryBlock.preds + continueExits
-                            entryBlock.replaceArgs(preds.toTypedArray())
-                        }
+                        entryBlock.addPreds(*continueExits.toTypedArray())
 
                         return unitConst
                     }
