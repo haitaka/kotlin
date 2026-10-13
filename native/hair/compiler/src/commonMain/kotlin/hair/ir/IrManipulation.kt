@@ -16,6 +16,9 @@ class SessionImpl: Session() {
     val argUpdater: ArgumentUpdater = ArgumentUpdaterImpl(this)
     val normalization = Normalization(this)
 
+    /** Nesting depth of the IR modification scopes, see [modificationScope]. */
+    internal var modificationDepth = 0
+
     /** Adds the node to tha graph in its canonical form with uses wired */
     fun wireUp(node: Node): Node = node
         .let { normalization.normalize(it) }
@@ -72,14 +75,31 @@ fun <T> Session.observingBuiltNodes(observer: (Node) -> Unit, block: () -> T): T
     block
 )
 
+/**
+ * Runs [action] as an IR modification scope. Scopes nest (e.g. [insertAfter] opens one inside the caller's), but
+ * DCE and verification run only when the outermost one exits: inner scopes see a graph that is still being
+ * transformed, which neither must interfere with.
+ */
+private inline fun <T> Session.modificationScope(runDCE: Boolean, action: () -> T): T {
+    this as SessionImpl
+    modificationDepth++
+    val result = try {
+        action()
+    } finally {
+        modificationDepth--
+    }
+    if (modificationDepth == 0) {
+        if (runDCE) eliminateDead()
+        verify()
+    }
+    return result
+}
+
 fun <T> Session.buildInitialIR(
     builderAction: context(NodeBuilder, ControlFlowBuilder) ArgumentUpdater.() -> T
-): T {
-    return context(nodeBuilder, ControlFlowBuilder(entry)) {
-        argUpdater.builderAction().also {
-            eliminateDead()
-            verify()
-        }
+): T = modificationScope(runDCE = true) {
+    context(nodeBuilder, ControlFlowBuilder(entry)) {
+        argUpdater.builderAction()
     }
 }
 
@@ -90,12 +110,9 @@ fun <T> Session.buildInitialIR(
 fun <T> Session.modifyIR(
     runDCE: Boolean = true,
     builderAction: context(NodeBuilder, NoControlFlowBuilder) ArgumentUpdater.() -> T
-): T {
-    return context(nodeBuilder, NoControlFlowBuilder) {
-        argUpdater.builderAction().also {
-            if (runDCE) eliminateDead()
-            verify()
-        }
+): T = modificationScope(runDCE) {
+    context(nodeBuilder, NoControlFlowBuilder) {
+        argUpdater.builderAction()
     }
 }
 
@@ -107,12 +124,9 @@ fun <T> Session.modifyControlFlow(
     at: Controlling = unreachable,
     runDCE: Boolean = true,
     builderAction: context(NodeBuilder, ControlFlowBuilder) ArgumentUpdater.() -> T
-): T {
-    return context(nodeBuilder, ControlFlowBuilder(at)) {
-        argUpdater.builderAction().also {
-            if (runDCE) eliminateDead()
-            verify()
-        }
+): T = modificationScope(runDCE) {
+    context(nodeBuilder, ControlFlowBuilder(at)) {
+        argUpdater.builderAction()
     }
 }
 

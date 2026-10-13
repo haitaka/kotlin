@@ -78,15 +78,17 @@ class SSATest : IrTest {
             whileLoop(ReadVar(var2)) {}
 
             ReturnVoid()
-
-            buildSSA()
-
-            printGraphviz()
-
-            // TODO assert more?
-            assertTrue(allNodes<AssignVar>().toList().isEmpty())
-            assertTrue(allNodes<ReadVar>().toList().isEmpty())
         }
+
+        // Outside the build scope: the dead code SSA construction leaves behind is only removed when the outermost
+        // modification scope exits, and the GCM behind printGraphviz cannot place dead nodes.
+        buildSSA()
+
+        printGraphviz()
+
+        // TODO assert more?
+        assertTrue(allNodes<AssignVar>().toList().isEmpty())
+        assertTrue(allNodes<ReadVar>().toList().isEmpty())
     }
 
     // FIXME seems to be more of a test add normalization
