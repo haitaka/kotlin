@@ -31,4 +31,25 @@ class LowerTest : IrTest {
         assertEquals(obj, ret.result)
         assertEquals(entry, ret.control)
     }
+
+    /**
+     * Models `return p0 is Foo`. IsInstanceOf floats, but its lowering is a runtime call, which has to be inserted
+     * into the control spine at the position GCM picked for the check.
+     */
+    @Test
+    fun testIsInstanceOfIsLoweredOntoTheSpine() = withTestSession {
+        lateinit var ret: Return
+
+        buildInitialIR {
+            ret = Return(IsInstanceOf(Cls("Foo"))(Param(0))) as Return
+        }
+
+        lower()
+
+        assertTrue(allNodes<IsInstanceOf>().none(), "IsInstanceOf must be lowered")
+        val call = ret.result
+        assertTrue(call is InvokeStatic, "the check must become a runtime call, was $call")
+        assertEquals(call, ret.control, "the call must precede the Return on the spine")
+        assertEquals(entry, call.control, "the call must follow the block entry on the spine")
+    }
 }
