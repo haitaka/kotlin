@@ -2,7 +2,6 @@ package hair.ir.nodes
 
 import hair.utils.listIterator
 import kotlin.jvm.JvmInline
-import kotlin.math.max
 import kotlin.reflect.KClass
 import kotlin.reflect.cast
 
@@ -71,6 +70,13 @@ private fun Node.updateArg(index: Int, oldValue: Node?, newValue: Node?, update:
     argsUpdater.onArgUpdate(this, index, oldValue, newValue)
 }
 
+/**
+ * Sets a single argument edge.
+ *
+ * The update is reported to the [ArgumentUpdaterBase], which may normalize the host node or find an equal one
+ * via GVN, and then fold the host into that replacement. So after `host.args[i] = x` the host itself may be gone:
+ * do not keep using a reference to it, but re-read the node from its use or from the returned structure.
+ */
 context(argsUpdater: ArgumentUpdaterBase)
 operator fun ArgsList.set(index: Int, element: Node?): Node? {
     val old = elements[index]
@@ -80,31 +86,17 @@ operator fun ArgsList.set(index: Int, element: Node?): Node? {
     return old
 }
 
-// FIXME maybe it would be enough to have just add args for varargs?
-// FIXME make safer. Use with care
-context(argsUpdater: ArgumentUpdaterBase)
-fun Node.replaceArgs(newArgs: Array<Node?>): Node {
+/** Appends [exits] to the predecessors of this block, which must not have phis yet. */
+context(_: ControlFlowBuilder, _: ArgumentUpdaterBase)
+fun BlockEntry.addPreds(vararg exits: BlockExit) {
+    require(uses.none { it is Phi }) { "Can't add predecessors to $this: its phis would miss the joined values" }
     this as NodeBase
-    val oldArgs = args_
-    args_ = newArgs
-    val argsCount = max(args_.size, newArgs.size)
-    for (i in 0 until argsCount) {
-        val oldValue = oldArgs.getOrNull(i)
-        val newValue = newArgs.getOrNull(i)
-        // FIXME duplicates updateArg
-        if (oldValue != newValue) {
-            newValue?.addUse(this)
-            oldValue?.removeUse(this)
-            argsUpdater.onArgUpdate(this, i, oldValue, newValue)
-        }
+    val oldSize = args_.size
+    args_ = args_.copyOf(oldSize + exits.size)
+    // Fill the new slots through the regular single-edge path, so that every use is wired exactly once.
+    for ([offset, exit] in exits.withIndex()) {
+        args[oldSize + offset] = exit
     }
-
-    val replacement = form.ensureUniqueAfterArgsUpdate(this, oldArgs.toList())
-    return if (replacement != this) {
-        // FIXME what about control here?
-        this.replaceValueUses(replacement)
-        replacement
-    } else this
 }
 
 context(_: ArgumentUpdaterBase)

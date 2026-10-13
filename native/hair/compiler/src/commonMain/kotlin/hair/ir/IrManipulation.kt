@@ -189,8 +189,13 @@ fun BlockBody.replaceWithSubGraph(
     }
 }
 
+/**
+ * Removes a node whose uses are all gone.
+ *
+ * Private: the public operations always say what the uses of the node become.
+ */
 context(_: ArgumentUpdater)
-fun Node.kill() {
+private fun Node.kill() {
     require(uses.isEmpty())
     args.withIndex().forEach { [index, _] -> args[index] = null }
     unwireFromGraphAndDeregister()

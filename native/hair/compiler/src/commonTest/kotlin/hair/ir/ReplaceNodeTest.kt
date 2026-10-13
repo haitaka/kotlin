@@ -202,4 +202,26 @@ class ReplaceNodeTest : IrTest {
         assertFalse(block.inGraph, "the fused block must be gone")
         assertSame(entry, ret.control, "the block's spine must continue from the predecessor's")
     }
+
+    /** [BlockEntry.addPreds] wires every new predecessor exactly once. */
+    @Test
+    fun testAddPreds() = withTestSession {
+        lateinit var first: BlockExit
+        lateinit var second: BlockExit
+        lateinit var merge: BlockEntry
+        buildInitialIR {
+            val [trueExit, falseExit] = IfExits(Param(0))
+            BlockEntry(trueExit)
+            first = Goto()
+            BlockEntry(falseExit)
+            second = Goto()
+            merge = BlockEntry(first) as BlockEntry
+            merge.addPreds(second)
+            ReturnVoid()
+        }
+
+        assertContentEquals(listOf(first, second), merge.preds.toList())
+        assertEquals(listOf<Node>(merge), second.uses.toList(), "the new predecessor must be used once, by the block")
+        assertSame(merge, second.next)
+    }
 }
