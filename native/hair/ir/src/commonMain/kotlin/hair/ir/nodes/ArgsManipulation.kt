@@ -87,7 +87,7 @@ operator fun ArgsList.set(index: Int, element: Node?): Node? {
 }
 
 /** Appends [exits] to the predecessors of this block, which must not have phis yet. */
-context(_: CurrentControl, _: ArgumentUpdaterBase)
+context(_: ControlFlowBuilder, _: ArgumentUpdaterBase)
 fun BlockEntry.addPreds(vararg exits: BlockExit) {
     require(uses.none { it is Phi }) { "Can't add predecessors to $this: its phis would miss the joined values" }
     this as NodeBase
