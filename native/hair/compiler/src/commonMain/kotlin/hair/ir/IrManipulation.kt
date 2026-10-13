@@ -218,6 +218,40 @@ fun BlockBodyWithException.replaceThrowing(replacement: BlockBodyWithException) 
 }
 
 /**
+ * Replaces this block exit with [exit] in the predecessor list of the block it leads to, then kills it.
+ * [Session.unreachable] as [exit] cuts the edge.
+ */
+context(argUpdater: ArgumentUpdater)
+fun BlockExit.replaceWith(exit: BlockExit) {
+    val target = next
+    with(argUpdater) {
+        for ([index, pred] in target.preds.withIndex()) {
+            if (pred == this@replaceWith) target.preds[index] = exit
+        }
+    }
+    kill()
+}
+
+/** Folds a branch known to always go to [taken]: control continues through a [Goto] instead. */
+context(_: NodeBuilder, argUpdater: ArgumentUpdater)
+fun If.fold(taken: IfProjection) {
+    val dropped = if (taken == trueExit) falseExit else trueExit
+    val control = control
+    // Detach first, so that the Goto is the only control successor of the predecessor.
+    with(argUpdater) { controlOrNull = null }
+    taken.replaceWith(Goto(control))
+    dropped.replaceWith(session.unreachable)
+    kill()
+}
+
+/**
+ * Replaces this block entry with [control]: the spine of the block continues from [control]. The block must have
+ * no phis left.
+ */
+context(_: ArgumentUpdater)
+fun BlockEntry.replaceWith(control: Controlling) = rewireAndKill(control, null)
+
+/**
  * Discards a block that turned out to be unreachable: its spine successor is re-pointed at [Session.unreachable]
  * and its value uses - its phis - become [NoValue].
  */
