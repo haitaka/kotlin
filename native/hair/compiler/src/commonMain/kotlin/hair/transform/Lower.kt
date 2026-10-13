@@ -8,7 +8,6 @@ package hair.transform
 import hair.ir.*
 import hair.ir.nodes.ArrayIndexCheck
 import hair.ir.nodes.CheckCast
-import hair.ir.nodes.InvokeStatic
 import hair.ir.nodes.IsInstanceOf
 import hair.ir.nodes.Node
 import hair.ir.nodes.NodeBuilder
@@ -54,11 +53,11 @@ fun Session.lower() {
                             // TODO fast type checks
 
                             // FIXME it's a nonthrowing runtime call - create a separate node  for such things
-                            val replacement = insertAfter(control) {
+                            val replacement = control.insertAfter {
                                 InvokeStatic(RuntimeInterface.isSubtype)(
                                     TypeInfo(node.obj),
                                     ConstTypeInfo(node.targetType)
-                                ) as InvokeStatic
+                                )
                             }
                             node.replaceWith(replacement)
                         }

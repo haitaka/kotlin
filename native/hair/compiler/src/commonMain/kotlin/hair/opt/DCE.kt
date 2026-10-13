@@ -18,7 +18,7 @@ fun Session.eliminateDead(): Boolean {
     val aliveBlocks = dfs(cfg()).toList()
     val deadBlocks = allNodes<BlockEntry>().filter { it !in aliveBlocks }.toList()
     if (deadBlocks.isNotEmpty()) {
-        modifyIR(runDCE = false) {
+        modifyControlFlow(runDCE = false) {
             for (block in deadBlocks) {
                 if (!block.inGraph) continue
                 block.discardAsUnreachable()
