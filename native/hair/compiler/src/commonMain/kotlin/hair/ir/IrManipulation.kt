@@ -3,7 +3,7 @@ package hair.ir
 import hair.ir.nodes.*
 import hair.ir.nodes.Node
 import hair.opt.Normalization
-import hair.opt.eliminateDead
+import hair.opt.eliminateDeadNodes
 import hair.utils.isEmpty
 
 fun interface OnNodeBuilt {
@@ -12,9 +12,13 @@ fun interface OnNodeBuilt {
 
 class SessionImpl: Session() {
     val nodeBuilder: NodeBuilder = WiringUpNodeBuilder(this)
+    val controlFlowBuilder: ControlFlowBuilder = WiringUpControlFlowBuilder(this)
 
     val argUpdater: ArgumentUpdater = ArgumentUpdaterImpl(this)
     val normalization = Normalization(this)
+
+    /** The modification scope currently open on this session, if any, see [modificationScope]. */
+    internal var openScope: String? = null
 
     /** Adds the node to tha graph in its canonical form with uses wired */
     fun wireUp(node: Node): Node = node
@@ -37,10 +41,15 @@ class SessionImpl: Session() {
 }
 
 val Session.nodeBuilder get() = (this as SessionImpl).nodeBuilder
+val Session.controlFlowBuilder get() = (this as SessionImpl).controlFlowBuilder
 val Session.argUpdater get() = (this as SessionImpl).argUpdater
 val Session.normalization get() = (this as SessionImpl).normalization
 
 class WiringUpNodeBuilder internal constructor(override val session: SessionImpl) : NodeBuilder {
+    override fun onNodeBuilt(node: Node): Node = session.wireUp(node)
+}
+
+class WiringUpControlFlowBuilder internal constructor(override val session: SessionImpl) : ControlFlowBuilder {
     override fun onNodeBuilt(node: Node): Node = session.wireUp(node)
 }
 
@@ -85,53 +94,70 @@ fun <T> Session.observingBuiltNodes(observer: (Node) -> Unit, block: () -> T): T
     block
 )
 
-fun <T> Session.buildInitialIR(
-    builderAction: context(NodeBuilder, ControlFlowBuilder) ArgumentUpdater.() -> T
+/**
+ * Runs [action] as the modification scope [name].
+ *
+ * Scopes don't nest. The graph is free of dead code and verified when a scope begins and when it ends; within a
+ * scope, edits may leave dead code behind and break invariants temporarily.
+ */
+private inline fun <T, B, C> Session.modificationScope(
+    name: String,
+    builder: B,
+    controlMarker: C,
+    runDCE: Boolean,
+    action: context(B, C) () -> T,
 ): T {
-    return context(nodeBuilder, ControlFlowBuilder(entry)) {
-        argUpdater.builderAction().also {
-            eliminateDead()
-            verify()
+    this as SessionImpl
+    check(openScope == null) { "Can't open $name inside $openScope: modification scopes don't nest" }
+    openScope = name
+    val result = try {
+        context(builder, controlMarker) {
+            action()
+        }.also {
+            if (runDCE) context(controlFlowBuilder, argUpdater) { eliminateDeadNodes() }
         }
+    } finally {
+        openScope = null
     }
+    verify()
+    return result
+}
+
+fun <T> Session.buildInitialIR(
+    builderAction: context(ControlFlowBuilder, CurrentControl) ArgumentUpdater.() -> T
+): T = modificationScope("buildInitialIR", controlFlowBuilder, CurrentControl(entry), runDCE = true) {
+    argUpdater.builderAction()
 }
 
 fun <T> Session.modifyIR(
     runDCE: Boolean = true,
-    builderAction: context(NodeBuilder, NoControlFlowBuilder) ArgumentUpdater.() -> T
-): T {
-    return context(nodeBuilder, NoControlFlowBuilder) {
-        argUpdater.builderAction().also {
-            if (runDCE) eliminateDead()
-            verify()
-        }
-    }
+    builderAction: context(NodeBuilder, NoCurrentControl) ArgumentUpdater.() -> T
+): T = modificationScope("modifyIR", nodeBuilder, NoCurrentControl, runDCE) {
+    argUpdater.builderAction()
 }
 
 fun <T> Session.modifyControlFlow(
-    at: Controlling,
-    builderAction: context(NodeBuilder, ControlFlowBuilder) ArgumentUpdater.() -> T
-): T {
-    return context(nodeBuilder, ControlFlowBuilder(at)) {
-        argUpdater.builderAction().also {
-            eliminateDead()
-            verify()
-        }
-    }
+    runDCE: Boolean = true,
+    builderAction: context(ControlFlowBuilder, NoCurrentControl) ArgumentUpdater.() -> T
+): T = modificationScope("modifyControlFlow", controlFlowBuilder, NoCurrentControl, runDCE) {
+    argUpdater.builderAction()
 }
 
-context(argUpdater: ArgumentUpdater)
-fun <N: BlockBody> Session.insertAfter(point: Controlling, createNode: context(NodeBuilder, ControlFlowBuilder) () -> N): N {
-    val next = point.next
-    val node = modifyControlFlow(point) { createNode() }
-    with(argUpdater) { next.control = node }
-    return node
+
+context(builder: ControlFlowBuilder, argUpdater: ArgumentUpdater)
+fun <N : Node> Controlling.insertAfter(build: context(ControlFlowBuilder, CurrentControl) () -> N): N {
+    // Captured before building: until it is re-pointed, this node has two control successors.
+    val successor = next
+    val currentControl = CurrentControl(this)
+    val result = context(builder, currentControl) { build() }
+    with(argUpdater) { successor.control = currentControl.control }
+    return result
 }
 
-context(_: ArgumentUpdater)
-fun <N: BlockBody> Session.insertBefore(point: Controlled, createNode: context(NodeBuilder, ControlFlowBuilder) () -> N): N {
-    return insertAfter(point.control, createNode)
-}
+context(_: ControlFlowBuilder, _: ArgumentUpdater)
+fun <N : Node> Controlled.insertBefore(build: context(ControlFlowBuilder, CurrentControl) () -> N): N =
+    this@insertBefore.control.insertAfter(build)
+
 
 /**
  * Replaces this control-spine node with an arbitrary control-flow sub-graph.
@@ -139,8 +165,9 @@ fun <N: BlockBody> Session.insertBefore(point: Controlled, createNode: context(N
  * If the replaced node produced a value, [build] must return its replacement, to which all value uses
  * are redirected; return `null` for non-value nodes.
  */
+context(builder: ControlFlowBuilder, argUpdater: ArgumentUpdater)
 fun BlockBody.replaceWithSubGraph(
-    build: context(NodeBuilder, ControlFlowBuilder) ArgumentUpdater.() -> Node?,
+    build: context(ControlFlowBuilder, CurrentControl) ArgumentUpdater.() -> Node?,
 ) {
     val original = this
     if (original is Throwing) require(original.unwind == null) {
@@ -150,13 +177,14 @@ fun BlockBody.replaceWithSubGraph(
     val predecessor = original.control
     val successor = original.next
 
-    session.modifyControlFlow(predecessor) {
+    with(argUpdater) {
         // Detach the node up front so the predecessor's only live control successor is the sub-graph.
         original.controlOrNull = null
 
-        val replacementValue = build()
+        val currentControl = CurrentControl(predecessor)
+        val replacementValue = context(builder, currentControl) { argUpdater.build() }
 
-        val continuation = contextOf<ControlFlowBuilder>().lastControl
+        val continuation = currentControl.control
         successor.control = continuation
 
         replacementValue?.let { original.replaceValueUses(it) }
@@ -196,33 +224,33 @@ fun Node.replaceValueNodeWith(value: Node) {
     kill()
 }
 
-context(_: ArgumentUpdater)
+context(_: ControlFlowBuilder, _: ArgumentUpdater)
 fun BlockBody.replaceWith(newControl: Controlling, newValue: Node?) {
     requireNoExceptionEdge()
     rewireAndKill(newControl, newValue)
 }
 
-context(_: ArgumentUpdater)
+context(_: ControlFlowBuilder, _: ArgumentUpdater)
 fun BlockBody.replaceWith(node: BlockBody) = replaceWith(node, node)
 
-context(_: NodeBuilder, _: ArgumentUpdater)
+context(_: ControlFlowBuilder, _: ArgumentUpdater)
 fun BlockEntry.replaceWith(newControl: Controlling, newValue: Node = NoValue()) = rewireAndKill(newControl, newValue)
 
 /**
  * Removes this node from the control, joining its predecessor straight to its successor.
  * Value uses are redirected to [valueReplacement], which may be left out only if there are none.
  */
-context(_: ArgumentUpdater)
+context(_: ControlFlowBuilder, _: ArgumentUpdater)
 fun BlockBody.spliceOut(valueReplacement: Node? = null) = replaceWith(control, valueReplacement)
 
 /** Replaces a throwing control flow node with another one, carrying the exception edge over. */
-context(argUpdater: ArgumentUpdater)
+context(_: ControlFlowBuilder, argUpdater: ArgumentUpdater)
 fun BlockBodyWithException.replaceThrowing(replacement: BlockBodyWithException) {
     unwind?.let { with(argUpdater) { it.thrower = replacement } }
     rewireAndKill(replacement, replacement)
 }
 
-context(argUpdater: ArgumentUpdater)
+context(_: ControlFlowBuilder,argUpdater: ArgumentUpdater)
 fun BlockExit.replaceWith(exit: BlockExit) {
     val target = next
     with(argUpdater) {
@@ -233,11 +261,11 @@ fun BlockExit.replaceWith(exit: BlockExit) {
     kill()
 }
 
-context(_: NodeBuilder, argUpdater: ArgumentUpdater)
+context(_: ControlFlowBuilder, argUpdater: ArgumentUpdater)
 fun If.fold(taken: IfProjection) {
     require(taken.owner == this)
     val dropped = if (taken == trueExit) falseExit else trueExit
-    val control = control
+    val control = this@fold.control
     // Detach first, so that the Goto is the only control successor of the predecessor.
     with(argUpdater) { controlOrNull = null }
     taken.replaceWith(Goto(control))
