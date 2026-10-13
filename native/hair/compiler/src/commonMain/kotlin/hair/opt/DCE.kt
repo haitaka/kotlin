@@ -10,24 +10,29 @@ import hair.ir.*
 import hair.ir.nodes.*
 import hair.utils.forEachInWorklist
 
-fun Session.eliminateDead(): Boolean {
+/** Removes unreachable blocks and dead floating nodes, as a modification of its own. */
+fun Session.eliminateDead(): Boolean = modifyControlFlow(runDCE = false) { eliminateDeadNodes() }
+
+/**
+ * Removes unreachable blocks and dead floating nodes within the current modification scope. Every scope does so
+ * when it ends.
+ */
+context(_: ControlFlowBuilder, _: ArgumentUpdater)
+fun Session.eliminateDeadNodes(): Boolean {
     // Two phases run back to back:
     //   1. remove blocks that are unreachable in the CFG, and
     //   2. sweep away the dead "foam" — value nodes not reachable from any control-flow root
     //      (including whatever the block removal just orphaned).
     val aliveBlocks = dfs(cfg()).toList()
     val deadBlocks = allNodes<BlockEntry>().filter { it !in aliveBlocks }.toList()
-    if (deadBlocks.isNotEmpty()) {
-        modifyControlFlow(runDCE = false) {
-            for (block in deadBlocks) {
-                if (!block.inGraph) continue
-                block.discardAsUnreachable()
-            }
-        }
+    for (block in deadBlocks) {
+        if (!block.inGraph) continue
+        block.discardAsUnreachable()
     }
     return eliminateDeadFoam() || deadBlocks.isNotEmpty()
 }
 
+context(_: ArgumentUpdater)
 private fun Session.eliminateDeadFoam(): Boolean {
     // Mark-and-sweep to handle dead cycles (e.g. mutually referencing Phis)
     // FIXME maybe find common grounds for control flow handling
@@ -40,6 +45,6 @@ private fun Session.eliminateDeadFoam(): Boolean {
     if (dead.isEmpty()) return false
 
     // The dead set is closed under uses: every user of a dead node is itself dead.
-    modifyIR(runDCE = false) { killAll(dead) }
+    killAll(dead)
     return true
 }

@@ -3,7 +3,7 @@ package hair.ir
 import hair.ir.nodes.*
 import hair.ir.nodes.Node
 import hair.opt.Normalization
-import hair.opt.eliminateDead
+import hair.opt.eliminateDeadNodes
 import hair.utils.isEmpty
 
 fun interface OnNodeBuilt {
@@ -17,8 +17,8 @@ class SessionImpl: Session() {
     val argUpdater: ArgumentUpdater = ArgumentUpdaterImpl(this)
     val normalization = Normalization(this)
 
-    /** Nesting depth of the IR modification scopes, see [modificationScope]. */
-    internal var modificationDepth = 0
+    /** The modification scope currently open on this session, if any, see [modificationScope]. */
+    internal var openScope: String? = null
 
     /** Adds the node to tha graph in its canonical form with uses wired */
     fun wireUp(node: Node): Node = node
@@ -82,29 +82,31 @@ fun <T> Session.observingBuiltNodes(observer: (Node) -> Unit, block: () -> T): T
 )
 
 /**
- * Runs [action] as an IR modification scope. Scopes nest (e.g. [insertAfter] opens one inside the caller's), but
- * DCE and verification run only when the outermost one exits: inner scopes see a graph that is still being
- * transformed, which neither must interfere with.
+ * Runs [action] as the modification scope [name].
+ *
+ * Scopes don't nest. The graph is free of dead code and verified when a scope begins and when it ends; within a
+ * scope, edits may leave dead code behind and break invariants temporarily. The modification tools never open a
+ * scope: they require one in their context instead.
  */
-private inline fun <T> Session.modificationScope(runDCE: Boolean, action: () -> T): T {
+private inline fun <T> Session.modificationScope(name: String, runDCE: Boolean, action: () -> T): T {
     this as SessionImpl
-    modificationDepth++
+    check(openScope == null) { "Can't open $name inside $openScope: modification scopes don't nest" }
+    openScope = name
     val result = try {
-        action()
+        action().also {
+            if (runDCE) context(controlFlowBuilder, argUpdater) { eliminateDeadNodes() }
+        }
     } finally {
-        modificationDepth--
+        openScope = null
     }
-    if (modificationDepth == 0) {
-        if (runDCE) eliminateDead()
-        verify()
-    }
+    verify()
     return result
 }
 
 /** Builds the initial IR, appending control-flow nodes at a [CurrentControl] that starts at [Session.entry]. */
 fun <T> Session.buildInitialIR(
     builderAction: context(ControlFlowBuilder, CurrentControl) ArgumentUpdater.() -> T
-): T = modificationScope(runDCE = true) {
+): T = modificationScope("buildInitialIR", runDCE = true) {
     context(controlFlowBuilder, CurrentControl(entry)) {
         argUpdater.builderAction()
     }
@@ -117,7 +119,7 @@ fun <T> Session.buildInitialIR(
 fun <T> Session.modifyIR(
     runDCE: Boolean = true,
     builderAction: context(NodeBuilder, NoCurrentControl) ArgumentUpdater.() -> T
-): T = modificationScope(runDCE) {
+): T = modificationScope("modifyIR", runDCE) {
     context(nodeBuilder, NoCurrentControl) {
         argUpdater.builderAction()
     }
@@ -130,7 +132,7 @@ fun <T> Session.modifyIR(
 fun <T> Session.modifyControlFlow(
     runDCE: Boolean = true,
     builderAction: context(ControlFlowBuilder, NoCurrentControl) ArgumentUpdater.() -> T
-): T = modificationScope(runDCE) {
+): T = modificationScope("modifyControlFlow", runDCE) {
     context(controlFlowBuilder, NoCurrentControl) {
         argUpdater.builderAction()
     }
