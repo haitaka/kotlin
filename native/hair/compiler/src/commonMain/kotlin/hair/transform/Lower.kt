@@ -8,11 +8,10 @@ package hair.transform
 import hair.ir.*
 import hair.ir.nodes.ArrayIndexCheck
 import hair.ir.nodes.CheckCast
-import hair.ir.nodes.ControlFlowBuilder
+import hair.ir.nodes.InvokeStatic
 import hair.ir.nodes.IsInstanceOf
 import hair.ir.nodes.Node
 import hair.ir.nodes.NodeBuilder
-import hair.ir.nodes.replaceValueUses
 import hair.sym.CmpOp
 import hair.sym.HairType
 import hair.sym.RuntimeInterface
@@ -51,24 +50,22 @@ fun Session.lower() {
 
                         override fun visitIsInstanceOf(node: IsInstanceOf) {
                             val control = pos(node)
-                            contextOf<ControlFlowBuilder>().at(control)
 
                             // TODO fast type checks
 
                             // FIXME it's a nonthrowing runtime call - create a separate node  for such things
-                            val replacement = InvokeStatic(RuntimeInterface.isSubtype)(
-                                TypeInfo(node.obj),
-                                ConstTypeInfo(node.targetType)
-                            )
-                            node.replaceValueUsesAndKill(replacement)
-                            control.next.control = replacement
+                            val replacement = insertAfter(control) {
+                                InvokeStatic(RuntimeInterface.isSubtype)(
+                                    TypeInfo(node.obj),
+                                    ConstTypeInfo(node.targetType)
+                                ) as InvokeStatic
+                            }
+                            node.replaceWith(replacement)
                         }
 
                         override fun visitCheckCast(node: CheckCast) {
                             // TODO strike out?
-                            node.replaceValueUses(node.obj)
-                            // CheckCast is pinned to the control spine, so its successor still uses it as control
-                            node.removeFromControl()
+                            node.spliceOut(node.obj)
                         }
 
                         override fun visitArrayIndexCheck(node: ArrayIndexCheck) {

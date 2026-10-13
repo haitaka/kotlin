@@ -54,11 +54,7 @@ class ArgumentUpdaterImpl(val session: SessionImpl) : ArgumentUpdater {
                 .let { session.gvn(it) }
 
             if (replacement != node) {
-                // FIXME introduce common tool
-                (node as? Controlling)?.nextOrNull?.let {
-                    it.control = replacement as Controlling
-                }
-                node.replaceValueUsesAndKill(replacement)
+                node.foldInto(replacement)
             } else {
                 newValue.addUse(replacement)
             }
@@ -109,27 +105,6 @@ fun <T> Session.modifyControlFlow(
             verify()
         }
     }
-}
-
-// TODO require cfg modificator
-context(_: ArgumentUpdater)
-fun Controlled.eraseControl() {
-    // FIXME use controlIndex or something
-    args.erase(0)
-}
-
-// TODO move into control manipulator
-context(argUpdater: ArgumentUpdater)
-fun BlockBody.removeFromControl() = with(argUpdater) {
-//    for (arg in args) {
-//        arg.removeUse(this)
-//        //updateArg(arg, null) {} // FIXME find a better way
-//    }
-    val prev = control
-    controlOrNull = null
-    next.control = prev
-    //eraseControl()
-    kill()
 }
 
 context(argUpdater: ArgumentUpdater)
@@ -183,8 +158,104 @@ fun Node.kill() {
     unwireFromGraphAndDeregister()
 }
 
-context(_: ArgumentUpdater)
-fun Node.replaceValueUsesAndKill(replacement: Node) {
-    replaceValueUses(replacement)
+/**
+ * The core of every replacement: re-points the control-spine successor at [control], redirects value uses to
+ * [value], then kills this node.
+ *
+ * TODO require a CFG-modification capability here - modifyIR must not permit spine edits.
+ */
+context(argUpdater: ArgumentUpdater)
+private fun Controlling.rewireAndKill(control: Controlling, value: Node?) {
+    // Before anything else, while `nextOrNull` still resolves through this node.
+    nextOrNull?.let { with(argUpdater) { it.control = control } }
+    if (value != null) replaceValueUses(value)
+    require(uses.isEmpty()) { "$this still has uses after rewiring; pass a value replacement" }
     kill()
+}
+
+/**
+ * Redirects every value use of this node to [value], then kills it.
+ *
+ * Only for nodes off the control spine - a spine node also has a control edge (and possibly an exception edge)
+ * to account for, so it needs [replaceWith], [spliceOut] or [replaceThrowing] instead.
+ */
+context(_: ArgumentUpdater)
+fun Node.replaceWith(value: Node) {
+    require(this !is ControlFlow) {
+        "$this is part of the control flow; use replaceWith(control, value), spliceOut or replaceThrowing"
+    }
+    replaceValueUses(value)
+    kill()
+}
+
+/** Replaces a spine node: the successor's control becomes [control], value uses become [value]. */
+context(_: ArgumentUpdater)
+fun BlockBody.replaceWith(control: Controlling, value: Node?) {
+    requireNoExceptionEdge()
+    rewireAndKill(control, value)
+}
+
+/** Replaces a spine node with another spine node, which takes over both its control and its value uses. */
+context(_: ArgumentUpdater)
+fun BlockBody.replaceWith(node: BlockBody) = replaceWith(node, node)
+
+/**
+ * Removes this node from the control spine, joining its predecessor straight to its successor.
+ * Value uses are redirected to [value], which may be left out only if there are none.
+ */
+context(_: ArgumentUpdater)
+fun BlockBody.spliceOut(value: Node? = null) = replaceWith(control, value)
+
+/**
+ * Replaces a throwing spine node with another one, carrying the exception edge over.
+ *
+ * The explicit counterpart of [replaceWith], which refuses a node that can still unwind.
+ */
+context(argUpdater: ArgumentUpdater)
+fun BlockBodyWithException.replaceThrowing(replacement: BlockBodyWithException) {
+    unwind?.let { with(argUpdater) { it.thrower = replacement } }
+    rewireAndKill(replacement, replacement)
+}
+
+/**
+ * Discards a block that turned out to be unreachable: its spine successor is re-pointed at [Session.unreachable]
+ * and its value uses - its phis - become [NoValue].
+ */
+context(_: NodeBuilder, _: ArgumentUpdater)
+fun BlockEntry.discardAsUnreachable() = rewireAndKill(session.unreachable, NoValue())
+
+/**
+ * Kills every node in [nodes], which must be closed under uses - every user of a node in the set is itself in
+ * the set. All outgoing argument edges are severed first, so that use lists come out empty even across cycles,
+ * which a node-at-a-time [kill] cannot do.
+ */
+context(_: ArgumentUpdater)
+fun Session.killAll(nodes: Collection<Node>) {
+    for (node in nodes) {
+        for (arg in node.args) arg?.removeUse(node)
+    }
+    for (node in nodes) {
+        node.unwireFromGraphAndDeregister()
+    }
+}
+
+/**
+ * Redirects this node to the [replacement] normalization or GVN folded it into, then kills it.
+ *
+ * Internal to [ArgumentUpdaterImpl]: unlike the public replacement ops it takes the replacement to be of the
+ * same kind as the original - which normalization guarantees - and so carries the exception edge over silently.
+ */
+context(_: ArgumentUpdater)
+internal fun Node.foldInto(replacement: Node) = when (this) {
+    is Controlling -> rewireAndKill(replacement as Controlling, replacement)
+    else -> {
+        replaceValueUses(replacement)
+        kill()
+    }
+}
+
+private fun BlockBody.requireNoExceptionEdge() {
+    if (this is Throwing) require(unwind == null) {
+        "$this has an exception edge; use replaceThrowing"
+    }
 }
