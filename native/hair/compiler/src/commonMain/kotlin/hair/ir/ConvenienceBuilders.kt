@@ -10,7 +10,7 @@ import hair.utils.ensuring
 context(nodeBuilder: NodeBuilder)
 fun ReturnVoid(control: Controlling?) = Return(control, UnitValue())
 
-context(nodeBuilder: NodeBuilder, controlBuilder: ControlFlowBuilder)
+context(nodeBuilder: NodeBuilder, currentControl: CurrentControl)
 fun ReturnVoid() = Return(UnitValue())
 
 context(nodeBuilder: NodeBuilder)
@@ -28,11 +28,11 @@ fun Const(type: HairType, value: Number) = when (type) {
 }
 
 // FIXME make Unreachable value-numbered
-context(controlBuilder: ControlFlowBuilder)
-fun Session.unreachable() = controlBuilder.at(unreachable)
+context(currentControl: CurrentControl)
+fun Session.unreachable() = currentControl.at(unreachable)
 
 
-context(nodeBuilder: NodeBuilder, controlBuilder: ControlFlowBuilder)
+context(nodeBuilder: NodeBuilder, currentControl: CurrentControl)
 fun IfExits(cond: Node): Pair<BlockExit, BlockExit> {
     val ifNode = If(cond)
     if (ifNode is Unreachable) return ifNode to ifNode
@@ -54,7 +54,7 @@ fun Phi(block: Controlling, vararg inputs: ValueAndExit): Node = when (block) {
     else -> inputs.single().value
 }
 
-context(_: NodeBuilder, _: ControlFlowBuilder)
+context(_: NodeBuilder, _: CurrentControl)
 fun Session.breakControlFlowWithUnreachable() {
     // terminate existing control flow with a block end
     Halt()
@@ -63,13 +63,13 @@ fun Session.breakControlFlowWithUnreachable() {
 }
 
 // CFG structures
-typealias ExprBuilder = context(NodeBuilder, ControlFlowBuilder) () -> Node
+typealias ExprBuilder = context(NodeBuilder, CurrentControl) () -> Node
 
-context(nodeBuilder: NodeBuilder, controlBuilder: ControlFlowBuilder)
+context(nodeBuilder: NodeBuilder, currentControl: CurrentControl)
 fun branch(
     cond: Node,
-    trueInit: context(NodeBuilder, ControlFlowBuilder) () -> Unit,
-    falseInit: context(NodeBuilder, ControlFlowBuilder) () -> Unit
+    trueInit: context(NodeBuilder, CurrentControl) () -> Unit,
+    falseInit: context(NodeBuilder, CurrentControl) () -> Unit
 ) {
     val condBuilder: ExprBuilder = { cond }
     branch(listOf(
@@ -78,7 +78,7 @@ fun branch(
     ))
 }
 
-context(nodeBuilder: NodeBuilder, controlBuilder: ControlFlowBuilder)
+context(nodeBuilder: NodeBuilder, currentControl: CurrentControl)
 fun branch(branches: List<Pair<ExprBuilder?, ExprBuilder>>): Node {
     require(branches.isNotEmpty())
 
@@ -95,11 +95,11 @@ fun branch(branches: List<Pair<ExprBuilder?, ExprBuilder>>): Node {
         } else {
             val [trueExit, falseExit] = IfExits(cond())
 
-            BlockEntry(trueExit).ensuring { controlBuilder.lastControl == it }
+            BlockEntry(trueExit).ensuring { currentControl.control == it }
             val value = body()
             val trueGoto = Goto()
 
-            BlockEntry(falseExit).ensuring { controlBuilder.lastControl == it }
+            BlockEntry(falseExit).ensuring { currentControl.control == it }
 
             ValueAndExit(value, trueGoto)
         }
@@ -113,8 +113,8 @@ fun branch(branches: List<Pair<ExprBuilder?, ExprBuilder>>): Node {
 }
 
 // FIXME cond should be a builder
-context(nodeBuilder: NodeBuilder, controlBuilder: ControlFlowBuilder, _: ArgumentUpdaterBase)
-fun whileLoop(cond: Node, body: context(NodeBuilder, ControlFlowBuilder) () -> Unit) {
+context(nodeBuilder: NodeBuilder, currentControl: CurrentControl, _: ArgumentUpdaterBase)
+fun whileLoop(cond: Node, body: context(NodeBuilder, CurrentControl) () -> Unit) {
     val condBlock = BlockEntry(Goto(), null) as BlockEntry
     val [trueExit, falseExit] = IfExits(cond)
 
@@ -125,9 +125,9 @@ fun whileLoop(cond: Node, body: context(NodeBuilder, ControlFlowBuilder) () -> U
     BlockEntry(falseExit)
 }
 
-typealias CatchBuilder = context(NodeBuilder, ControlFlowBuilder) (Node) -> Node
+typealias CatchBuilder = context(NodeBuilder, CurrentControl) (Node) -> Node
 
-context(nodeBuilder: NodeBuilder, controlBuilder: ControlFlowBuilder, _: ArgumentUpdaterBase)
+context(nodeBuilder: NodeBuilder, currentControl: CurrentControl, _: ArgumentUpdaterBase)
 fun tryCatch(
     tryBody: ExprBuilder,
     catches: List<Pair<HairClass, CatchBuilder>>,

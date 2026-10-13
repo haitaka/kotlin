@@ -60,21 +60,21 @@ sealed class NodeBase(final override val form: Form, args: List<Node?>) : Node {
 
 
 // FIXME move?
-class ControlFlowBuilder(at: Controlling) {
-    var lastControl: Controlling = at
+class CurrentControl(at: Controlling) {
+    var control: Controlling = at
 
     // TODO make scoped?
     fun at(pos: Controlling) {
-        lastControl = pos
+        control = pos
     }
 
-    inline fun <N : Controlling> appendControl(next: () -> N): N = next().also { lastControl = it }
+    inline fun <N : Controlling> appendControl(next: () -> N): N = next().also { control = it }
 
     inline fun <N : Node> appendControlled(next: (Controlling) -> N): N =
-        next(lastControl).also {
+        next(control).also {
             // TODO make separate appendBlockBody ?
-            lastControl = it as? Controlling ?: it.session.unreachable
+            control = it as? Controlling ?: it.session.unreachable
         }
 }
 
-object NoControlFlowBuilder
+object NoCurrentControl

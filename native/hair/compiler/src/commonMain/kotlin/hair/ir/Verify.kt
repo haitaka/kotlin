@@ -7,7 +7,7 @@ package hair.ir
 
 import hair.ir.*
 import hair.ir.nodes.CheckCast
-import hair.ir.nodes.ControlFlowBuilder
+import hair.ir.nodes.CurrentControl
 import hair.ir.nodes.IsInstanceOf
 import hair.ir.nodes.Node
 import hair.ir.nodes.NodeBuilder

@@ -142,7 +142,7 @@ class ReplaceNodeTest : IrTest {
         lateinit var merge: BlockEntry
         buildInitialIR {
             branch(Param(0), {}, {})
-            merge = contextOf<ControlFlowBuilder>().lastControl as BlockEntry
+            merge = contextOf<CurrentControl>().control as BlockEntry
             ReturnVoid()
         }
         return allNodes<If>().single() to merge
