@@ -108,9 +108,9 @@ class Generator(private val generationPath: File) {
             val nodeBuilder = "nodeBuilder"
             val session = "$nodeBuilder.session"
             val nodeBuilderContext = listOf(nodeBuilder to "NodeBuilder")
-            val controlBuilder = "controlBuilder"
-            val controlBuilderContext = nodeBuilderContext + listOf(
-                controlBuilder to "ControlFlowBuilder",
+            val currentControl = "currentControl"
+            val currentControlContext = nodeBuilderContext + listOf(
+                currentControl to "CurrentControl",
             )
             for (node in generatedElements.filterIsInstance<Node>()) {
                 //if (node.nestedIn != null) continue
@@ -162,7 +162,7 @@ class Generator(private val generationPath: File) {
                             returnType = refName(node) + ".Form",
                             value = (formBuilderName + formBuilderNameSuffix)(formArgs),
                             context = nodeBuilderContext + listOf(
-                                "_" to "NoControlFlowBuilder"
+                                "_" to "NoCurrentControl"
                             ),
                         )
                         method(
@@ -170,7 +170,7 @@ class Generator(private val generationPath: File) {
                             params = formParams,
                             returnType = resultNodeType,
                             value = (formBuilderName + formBuilderNameSuffix)(formArgs)(),
-                            context = controlBuilderContext,
+                            context = currentControlContext,
                         )
                     }
                 }
@@ -186,8 +186,8 @@ class Generator(private val generationPath: File) {
                 }
 
                 fun appendCtrl(builder: () -> String): String = when {
-                    node.hasControlInput() -> "$controlBuilder.appendControlled { ctrl -> ${builder()} }"
-                    node.producesControl() -> "$controlBuilder.appendControl { ${builder()} }"
+                    node.hasControlInput() -> "$currentControl.appendControlled { ctrl -> ${builder()} }"
+                    node.producesControl() -> "$currentControl.appendControl { ${builder()} }"
                     else -> error("Should not reach here $node")
                 }
 
@@ -208,7 +208,7 @@ class Generator(private val generationPath: File) {
                             returnType = resultNodeType,
                             value = noCtrlBuilder(nodeArgs),
                             context = nodeBuilderContext + listOf(
-                                "_" to "NoControlFlowBuilder"
+                                "_" to "NoCurrentControl"
                             ),
                         )
                     } else {
@@ -226,7 +226,7 @@ class Generator(private val generationPath: File) {
                             params = node.nodeParamsList(dropControl = true),
                             returnType = resultNodeType,
                             value = appendCtrl { noCtrlBuilder(nodeArgsNoCtrl) },
-                            context = controlBuilderContext,
+                            context = currentControlContext,
                         )
                     }
                 } else {
@@ -265,7 +265,7 @@ class Generator(private val generationPath: File) {
                             params = node.nodeParamsList(dropControl = true),
                             returnType = resultNodeType,
                             value = appendCtrl { "this@invoke"(nodeArgsNoCtrl) },
-                            context = controlBuilderContext,
+                            context = currentControlContext,
                         )
                     }
                 }
@@ -315,7 +315,7 @@ class Generator(private val generationPath: File) {
                             name = "visit${builderName(node)}",
                             params = listOf("node" to refName(node)),
                             returnType = refName(node),
-                            value = "context(nodeBuilder, NoControlFlowBuilder) { ${
+                            value = "context(nodeBuilder, NoCurrentControl) { ${
                                 builderName(node) + formArgs + nodeArgs
                             } }" + cast,
                         )

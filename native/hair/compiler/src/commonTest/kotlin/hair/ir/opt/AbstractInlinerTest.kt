@@ -5,7 +5,7 @@ import hair.compilation.FunctionCompilation
 import hair.ir.IrTest
 import hair.ir.buildInitialIR
 import hair.ir.nodes.ArgumentUpdater
-import hair.ir.nodes.ControlFlowBuilder
+import hair.ir.nodes.CurrentControl
 import hair.ir.nodes.NodeBuilder
 import hair.sym.HairFunction
 import hair.test.testConfig
@@ -13,7 +13,7 @@ import hair.test.testConfig
 interface AbstractInlinerTest : IrTest {
 
     class InlinerTestCompilation(val compilation: Compilation) {
-        fun define(function: HairFunction, buildBody: context(NodeBuilder, ArgumentUpdater, ControlFlowBuilder) () -> Unit): FunctionCompilation {
+        fun define(function: HairFunction, buildBody: context(NodeBuilder, ArgumentUpdater, CurrentControl) () -> Unit): FunctionCompilation {
             val funCompilation = compilation.getCompilation(function)
             funCompilation.session.apply {
                 buildInitialIR {
