@@ -3,7 +3,7 @@ package hair.ir
 import hair.ir.nodes.*
 import hair.ir.nodes.Node
 import hair.opt.Normalization
-import hair.opt.eliminateDead
+import hair.opt.eliminateDeadNodes
 import hair.utils.isEmpty
 
 fun interface OnNodeBuilt {
@@ -16,6 +16,9 @@ class SessionImpl: Session() {
 
     val argUpdater: ArgumentUpdater = ArgumentUpdaterImpl(this)
     val normalization = Normalization(this)
+
+    /** The modification scope currently open on this session, if any, see [modificationScope]. */
+    internal var openScope: String? = null
 
     /** Adds the node to tha graph in its canonical form with uses wired */
     fun wireUp(node: Node): Node = node
@@ -78,15 +81,34 @@ fun <T> Session.observingBuiltNodes(observer: (Node) -> Unit, block: () -> T): T
     block
 )
 
+/**
+ * Runs [action] as the modification scope [name].
+ *
+ * Scopes don't nest. The graph is free of dead code and verified when a scope begins and when it ends; within a
+ * scope, edits may leave dead code behind and break invariants temporarily. The modification tools never open a
+ * scope: they require one in their context instead.
+ */
+private inline fun <T> Session.modificationScope(name: String, runDCE: Boolean, action: () -> T): T {
+    this as SessionImpl
+    check(openScope == null) { "Can't open $name inside $openScope: modification scopes don't nest" }
+    openScope = name
+    val result = try {
+        action().also {
+            if (runDCE) context(controlFlowBuilder, argUpdater) { eliminateDeadNodes() }
+        }
+    } finally {
+        openScope = null
+    }
+    verify()
+    return result
+}
+
 /** Builds the initial IR, appending control-flow nodes at a [CurrentControl] that starts at [Session.entry]. */
 fun <T> Session.buildInitialIR(
     builderAction: context(ControlFlowBuilder, CurrentControl) ArgumentUpdater.() -> T
-): T {
-    return context(controlFlowBuilder, CurrentControl(entry)) {
-        argUpdater.builderAction().also {
-            eliminateDead()
-            verify()
-        }
+): T = modificationScope("buildInitialIR", runDCE = true) {
+    context(controlFlowBuilder, CurrentControl(entry)) {
+        argUpdater.builderAction()
     }
 }
 
@@ -97,12 +119,9 @@ fun <T> Session.buildInitialIR(
 fun <T> Session.modifyIR(
     runDCE: Boolean = true,
     builderAction: context(NodeBuilder, NoCurrentControl) ArgumentUpdater.() -> T
-): T {
-    return context(nodeBuilder, NoCurrentControl) {
-        argUpdater.builderAction().also {
-            if (runDCE) eliminateDead()
-            verify()
-        }
+): T = modificationScope("modifyIR", runDCE) {
+    context(nodeBuilder, NoCurrentControl) {
+        argUpdater.builderAction()
     }
 }
 
@@ -113,12 +132,9 @@ fun <T> Session.modifyIR(
 fun <T> Session.modifyControlFlow(
     runDCE: Boolean = true,
     builderAction: context(ControlFlowBuilder, NoCurrentControl) ArgumentUpdater.() -> T
-): T {
-    return context(controlFlowBuilder, NoCurrentControl) {
-        argUpdater.builderAction().also {
-            if (runDCE) eliminateDead()
-            verify()
-        }
+): T = modificationScope("modifyControlFlow", runDCE) {
+    context(controlFlowBuilder, NoCurrentControl) {
+        argUpdater.builderAction()
     }
 }
 
