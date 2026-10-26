@@ -140,7 +140,7 @@ class CachedLibraries(
             override fun computeSerializedClassHierarchy() = mutableListOf<SerializedClassHierarchy>().also {
                 val directory = Path(path).absolute().parent.parent
                 val file = directory.resolve(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).resolve(CLASS_HIERARCHY_FILE_NAME)
-                if (file.exists()) ClassHierarchySerializer.deserializeTo(file.readBytes(), it)
+                ClassHierarchySerializer.deserializeTo(file.readBytes(), it)
             }
         }
 
@@ -213,7 +213,7 @@ class CachedLibraries(
             override fun computeSerializedClassHierarchy() = mutableListOf<SerializedClassHierarchy>().also {
                 existingFileDirs.forEach { fileDir ->
                     val file = fileDir.resolve(PER_FILE_CACHE_IR_LEVEL_DIR_NAME).resolve(CLASS_HIERARCHY_FILE_NAME)
-                    if (file.exists()) ClassHierarchySerializer.deserializeTo(file.readBytes(), it)
+                    ClassHierarchySerializer.deserializeTo(file.readBytes(), it)
                 }
             }
 

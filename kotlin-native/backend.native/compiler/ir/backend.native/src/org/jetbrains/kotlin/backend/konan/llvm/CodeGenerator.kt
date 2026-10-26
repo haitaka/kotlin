@@ -19,7 +19,6 @@ import org.jetbrains.kotlin.backend.konan.cgen.CBridgeOrigin
 import org.jetbrains.kotlin.backend.konan.ir.OverriddenFunctionInfo
 import org.jetbrains.kotlin.backend.konan.ir.isAbstract
 import org.jetbrains.kotlin.backend.konan.llvm.KonanBinaryInterface.classHierarchyIdsSymbolName
-import org.jetbrains.kotlin.backend.konan.llvm.KonanBinaryInterface.interfaceIdSymbolName
 import org.jetbrains.kotlin.backend.konan.isCache
 import org.jetbrains.kotlin.backend.konan.llvm.ThreadState.Native
 import org.jetbrains.kotlin.backend.konan.llvm.ThreadState.Runnable
@@ -216,8 +215,10 @@ internal object VirtualTablesLookup {
      */
     private fun FunctionGenerationContext.interfaceIdOf(irClass: IrClass): LLVMValueRef = when {
         context.hasGlobalHierarchyAnalysis() -> llvm.int32(context.globalHierarchyInterfaceId(irClass))
-        context.hierarchyWillBeLaidOutByFinalLink ->
-            load(llvm.int32Type, importGlobal(irClass.interfaceIdSymbolName, llvm.int32Type))
+        context.hierarchyWillBeLaidOutByFinalLink -> {
+            val ids = importGlobal(irClass.classHierarchyIdsSymbolName, runtime.classHierarchyIdsType)
+            load(llvm.int32Type, structGep(runtime.classHierarchyIdsType, ids, 0 /* the interface id */))
+        }
         else -> llvm.int32(irClass.backupInterfaceId)
     }
 

@@ -533,6 +533,9 @@ class SerializedEagerInitializedFile(val file: SerializedFileReference)
 class SerializedObjCReverseBridge(
         val selector: String,
         val impl: String,
+        /** Empty when the method is not dispatched through an interface. */
+        val interfaceName: String,
+        /** The id [interfaceName] had in the compilation that wrote this; meaningless where the final link numbers the interfaces. */
         val interfaceId: Int,
         val itableSize: Int,
         val itableIndex: Int,
@@ -557,7 +560,7 @@ internal object ObjCAdapterSerializer {
     private const val FLAG_IS_INTERFACE = 1
 
     private val SerializedObjCAdapter.payloadSize: Int
-        get() = Int.SIZE_BYTES * (8 + 6 * reverseBridges.size)
+        get() = Int.SIZE_BYTES * (8 + 7 * reverseBridges.size)
 
     fun serialize(adapters: List<SerializedObjCAdapter>): ByteArray {
         val stringTable = buildStringTable {
@@ -569,6 +572,7 @@ internal object ObjCAdapterSerializer {
                 it.reverseBridges.forEach { bridge ->
                     +bridge.selector
                     +bridge.impl
+                    +bridge.interfaceName
                 }
             }
         }
@@ -587,6 +591,7 @@ internal object ObjCAdapterSerializer {
                 adapter.reverseBridges.forEach { bridge ->
                     writeInt(stringTable.indices[bridge.selector]!!)
                     writeInt(stringTable.indices[bridge.impl]!!)
+                    writeInt(stringTable.indices[bridge.interfaceName]!!)
                     writeInt(bridge.interfaceId)
                     writeInt(bridge.itableSize)
                     writeInt(bridge.itableIndex)
@@ -613,6 +618,7 @@ internal object ObjCAdapterSerializer {
                             SerializedObjCReverseBridge(
                                     selector = stringTable[readInt()],
                                     impl = stringTable[readInt()],
+                                    interfaceName = stringTable[readInt()],
                                     interfaceId = readInt(),
                                     itableSize = readInt(),
                                     itableIndex = readInt(),

@@ -239,11 +239,6 @@ internal class RTTIGenerator(
 
         val reflectionInfo = getReflectionInfo(irClass)
         val typeInfoGlobal = llvmDeclarations.typeInfoGlobal
-        // Only meaningful when another compilation lays the intervals out; otherwise classId_ carries this
-        // class's own interval, and without the optimizations there are no intervals at all.
-        val classHierarchyIds =
-                if (irClass.isInterface || !context.hierarchyWillBeLaidOutByFinalLink) llvm.nullPointer
-                else constPointer(importGlobal(irClass.classHierarchyIdsSymbolName, runtime.classHierarchyIdsType))
         val typeInfo = TypeInfo(
                 irClass.typeInfoPtr,
                 makeExtendedInfo(irClass),
@@ -256,7 +251,9 @@ internal class RTTIGenerator(
                 reflectionInfo.relativeName,
                 flagsFromClass(irClass) or reflectionInfo.reflectionFlags,
                 context.getLayoutBuilder(irClass).classId,
-                classHierarchyIds,
+                if (context.hierarchyWillBeLaidOutByFinalLink) {
+                    constPointer(importGlobal(irClass.classHierarchyIdsSymbolName, runtime.classHierarchyIdsType))
+                } else llvm.nullPointer,
                 llvmDeclarations.writableTypeInfoGlobal,
                 associatedObjects = genAssociatedObjects(irClass),
                 processObjectInMark = when {
@@ -310,7 +307,7 @@ internal class RTTIGenerator(
             val entries = irClass.implementedInterfaces.map { iface ->
                 InterfaceTableEntry(
                         interfaceName = iface.crossModuleName(),
-                        interfaceId = context.getLayoutBuilder(iface).classId,
+                        interfaceId = context.getLayoutBuilder(iface).emittedInterfaceId,
                         vtableSize = context.getLayoutBuilder(iface).interfaceVTableEntries.size,
                 )
             }
@@ -323,14 +320,15 @@ internal class RTTIGenerator(
      * of its own, but the ObjC runtime builds the tables of its subclasses out of these records.
      */
     fun interfaceTableRecordsForObjCTypeAdapter(irClass: IrClass): Pair<List<InterfaceTableRecord>, Int> {
+        context.requireOwnsInterfaceNumbering { "The Obj-C type adapter table of ${irClass.render()}" }
         val layouts = irClass.implementedInterfaces.map { context.getLayoutBuilder(it) }
-        val [slots, size] = layOutInterfaceLookupTable(layouts) { it.classId }
+        val [slots, size] = layOutInterfaceLookupTable(layouts) { it.emittedInterfaceId }
         val records = slots.map { iface ->
             if (iface == null)
                 InterfaceTableRecord(llvm.constInt32(0), llvm.constInt32(0), null)
             else
                 InterfaceTableRecord(
-                        llvm.constInt32(iface.classId),
+                        llvm.constInt32(iface.emittedInterfaceId),
                         llvm.constInt32(iface.interfaceVTableEntries.size),
                         emitInterfaceVTable(irClass, iface.irClass),
                 )
@@ -359,12 +357,15 @@ internal class RTTIGenerator(
                 llvm.nullPointer
             else impl.entryPointAddress
         }
+        val symbolName = interfaceVTableSymbolName(irClass.crossModuleName(), iface.crossModuleName())
         return staticData.placeGlobalConstArray(
-                interfaceVTableSymbolName(irClass.crossModuleName(), iface.crossModuleName()),
+                symbolName,
                 llvm.pointerType, vtableEntries,
                 // The lookup table this vtable goes into is laid out by the compilation producing the final binary.
                 isExported = context.hierarchyWillBeLaidOutByFinalLink,
-        )
+        ).also {
+            if (context.hierarchyWillBeLaidOutByFinalLink) hideGlobalHierarchySymbol(symbolName)
+        }
     }
 
     private fun mapRuntimeType(type: LLVMTypeRef, isObjectType: Boolean): Int {
@@ -483,8 +484,62 @@ internal class RTTIGenerator(
         }
     }
 
+    private fun interfaceTableRecord(
+            layoutBuilder: ClassLayoutBuilder,
+            methodImpls: Map<IrSimpleFunction, ConstPointer>,
+            id: Int,
+    ): InterfaceTableRecord {
+        val vtableEntries = layoutBuilder.interfaceVTableEntries.map { methodImpls[it]!! }
+        val interfaceVTable = staticData.placeGlobalArray("", llvm.pointerType, vtableEntries)
+        val interfaceVTableType = LLVMArrayType(llvm.pointerType, vtableEntries.size)!!
+        return InterfaceTableRecord(
+                llvm.constInt32(id),
+                llvm.constInt32(vtableEntries.size),
+                interfaceVTable.pointer.getElementPtr(llvm, interfaceVTableType, 0)
+        )
+    }
+
+    /**
+     * Emits an interface lookup table whose layout this compilation cannot compute, because the slot of a record
+     * is picked by the id of its interface and the final link is the one that numbers the interfaces. [records]
+     * holds the entries of the table without their ids, in the order of [interfacesPtr]; the runtime lays them
+     * out into the table at startup, before any Kotlin code runs.
+     */
+    private fun deferredInterfaceLookupTable(
+            codegen: CodeGenerator,
+            records: List<InterfaceTableRecord>,
+            interfacesPtr: ConstPointer,
+    ): ConstPointer {
+        val recordsPtr = staticData.placeGlobalConstArray("", runtime.interfaceTableRecordType, records)
+        // Room for every shape the table may take:
+        // a perfect hash table of at most MAX_BITS_PER_COLOR bits, or one slot per record where no such table exists.
+        val slotsType = LLVMArrayType(runtime.interfaceTableRecordType, maxOf(1 shl MAX_BITS_PER_COLOR, records.size))!!
+        val slots = staticData.createGlobal(slotsType, "")
+        slots.setZeroInitializer()
+        val table = staticData.placeGlobal("", Struct(
+                runtime.interfaceTableType,
+                llvm.constInt32(0),
+                slots.pointer.getElementPtr(llvm, slotsType, 0)
+        ))
+
+        val initializerProto = LlvmFunctionSignature(LlvmRetType(llvm.voidType, isObjectType = false))
+                .toProto(name = "", origin = null, linkage = LLVMLinkage.LLVMPrivateLinkage)
+        llvm.otherStaticInitializers += generateFunctionNoRuntime(codegen, initializerProto) {
+            call(
+                    llvm.layOutInterfaceTable,
+                    listOf(table.pointer.llvm, slots.pointer.llvm, recordsPtr.llvm, interfacesPtr.llvm,
+                            llvm.int32(records.size)),
+                    exceptionHandler = ExceptionHandler.Caller,
+                    verbatim = true,
+            )
+            ret(null)
+        }
+        return table.pointer
+    }
+
     // TODO: extract more code common with generate().
     fun generateSyntheticInterfaceImpl(
+            codegen: CodeGenerator,
             irClass: IrClass,
             methodImpls: Map<IrSimpleFunction, ConstPointer>,
             bodyType: ObjectBodyType,
@@ -513,26 +568,23 @@ internal class RTTIGenerator(
         val typeInfoWithVtableGlobal = staticData.createGlobal(typeInfoWithVtableType, "", isExported = false)
         val result = typeInfoWithVtableGlobal.pointer.getElementPtr(llvm, typeInfoWithVtableType, 0)
         // TODO: interfaces (e.g. FunctionN and Function) should have different colors.
-        val [interfaceTableSkeleton, interfaceTableSize] =
-                layOutInterfaceLookupTable(interfaces.map { context.getLayoutBuilder(it) }) { it.classId }
-
-        val interfaceTable = interfaceTableSkeleton.map { layoutBuilder ->
-            if (layoutBuilder == null) {
-                InterfaceTableRecord(llvm.constInt32(0), llvm.constInt32(0), null)
-            } else {
-                val vtableEntries = layoutBuilder.interfaceVTableEntries.map { methodImpls[it]!! }
-                val interfaceVTable = staticData.placeGlobalArray("", llvm.pointerType, vtableEntries)
-                val interfaceVTableType = LLVMArrayType(llvm.pointerType, vtableEntries.size)!!
-                InterfaceTableRecord(
-                        llvm.constInt32(layoutBuilder.classId),
-                        llvm.constInt32(layoutBuilder.interfaceVTableEntries.size),
-                        interfaceVTable.pointer.getElementPtr(llvm, interfaceVTableType, 0)
-                )
+        val layoutBuilders = interfaces.map { context.getLayoutBuilder(it) }
+        val interfaceTablePtr = if (context.hierarchyWillBeLaidOutByFinalLink) {
+            // This compilation knows none of the ids the table is keyed by, so it only emits its contents.
+            deferredInterfaceLookupTable(
+                    codegen,
+                    layoutBuilders.map { interfaceTableRecord(it, methodImpls, id = 0) },
+                    interfacesPtr
+            )
+        } else {
+            val [slots, size] = layOutInterfaceLookupTable(layoutBuilders) { it.emittedInterfaceId }
+            val records = slots.map { layoutBuilder ->
+                if (layoutBuilder == null) InterfaceTableRecord(llvm.constInt32(0), llvm.constInt32(0), null)
+                else interfaceTableRecord(layoutBuilder, methodImpls, layoutBuilder.emittedInterfaceId)
             }
+            val recordsPtr = staticData.placeGlobalConstArray("", runtime.interfaceTableRecordType, records)
+            staticData.placeGlobal("", Struct(runtime.interfaceTableType, llvm.constInt32(size), recordsPtr)).pointer
         }
-        val interfaceTableRecordsPtr = staticData.placeGlobalConstArray("", runtime.interfaceTableRecordType, interfaceTable)
-        val interfaceTablePtr = staticData.placeGlobal("",
-                Struct(runtime.interfaceTableType, llvm.constInt32(interfaceTableSize), interfaceTableRecordsPtr)).pointer
 
         val typeInfoWithVtable = llvm.struct(TypeInfo(
                 selfPtr = result,
@@ -631,18 +683,29 @@ internal fun ContextUtils.createInterfaceLookupTable(className: String, entries:
     table.setInitializer(initializer)
     table.setConstant(true)
     llvm.usedGlobals += table.llvmGlobal
+    hideGlobalHierarchySymbol(symbolName)
     return table.pointer
 }
 
+/**
+ * The vtable to put into the lookup table of [className] for the interface of [entry]: the global this
+ * compilation emitted for it, or a reference to the one the cache holding the class did.
+ */
 private fun ContextUtils.interfaceVTable(className: String, entry: InterfaceTableEntry): ConstPointer {
     // An interface with no methods of its own has no vtable to point at, and no call can ever reach for one.
     if (entry.vtableSize == 0) return llvm.nullPointer
     val symbolName = interfaceVTableSymbolName(className, entry.interfaceName)
-    return staticData.getGlobal(symbolName)?.pointer
-            ?: constPointer(importGlobal(
-                    symbolName,
-                    LLVMArrayType(llvm.pointerType, entry.vtableSize)!!
-            ))
+
+    staticData.getGlobal(symbolName)?.let { return it.pointer }
+
+    val imported = importGlobal(symbolName, LLVMArrayType(llvm.pointerType, entry.vtableSize)!!)
+    // The reference is weak because the symbol might remain undefined at link time.
+    // The lookup tables are laid out at the final link for every class of the whole-program hierarchy,
+    // and that hierarchy is assembled from every cache that was loaded.
+    // The caches the linker is given are fewer: only the ones the program actually depends on.
+    // A weak reference just resolves to null where nothing defines it.
+    LLVMSetLinkage(imported, LLVMLinkage.LLVMExternalWeakLinkage)
+    return constPointer(imported)
 }
 
 /**

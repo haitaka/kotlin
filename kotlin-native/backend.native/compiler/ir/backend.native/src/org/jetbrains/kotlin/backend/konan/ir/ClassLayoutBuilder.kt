@@ -18,6 +18,7 @@ import org.jetbrains.kotlin.backend.konan.llvm.hierarchyWillBeLaidOutByFinalLink
 import org.jetbrains.kotlin.backend.konan.llvm.globalHierarchyInterfaceId
 import org.jetbrains.kotlin.backend.konan.llvm.computeFunctionName
 import org.jetbrains.kotlin.backend.konan.llvm.needsCacheEntryPointForFinalFakeOverride
+import org.jetbrains.kotlin.backend.konan.llvm.requireOwnsInterfaceNumbering
 import org.jetbrains.kotlin.backend.konan.llvm.toLLVMType
 import org.jetbrains.kotlin.backend.konan.lower.bridgeTarget
 import org.jetbrains.kotlin.backend.konan.serialization.ClassFieldsDeserializer
@@ -241,22 +242,47 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: NativeBacke
     }
 
     /**
-     * The value to put into `TypeInfo.classId_`: the id of an interface in the interface numbering, the start
-     * of the DFS interval of a class, and zero where neither is known here.
+     * The value to put into `TypeInfo.classId_`: the start of the DFS interval of a class, the id of an
+     * interface in the interface numbering, and zero where neither is known here.
      */
     val classId: Int
-        get() {
+        get() = when {
             // The type info of such an obj class is built at runtime, by `createTypeInfo` in ObjCExport.mm,
             // whatever value written here never gets used.
-            if (irClass.isKotlinObjCClass()) return 0
-
-            if (context.hasGlobalHierarchyAnalysis()) {
-                if (irClass.isInterface) return context.globalHierarchyInterfaceId(irClass)
-                if (!context.hierarchyWillBeLaidOutByFinalLink) return context.globalHierarchyClassIdInterval(irClass).classIdLo
+            irClass.isKotlinObjCClass() -> 0
+            // The numbering will be done by later by the final link. This runtime should not rely on this field
+            // and use `TypeInfo.classHierarchyIds_` instead.
+            context.hierarchyWillBeLaidOutByFinalLink -> 0
+            !context.hasGlobalHierarchyAnalysis() -> {
+                // No global hierarchy optimizations - the checks will go through the backup path
+                if (irClass.isInterface) irClass.backupInterfaceId else 0
             }
+            irClass.isInterface -> context.globalHierarchyInterfaceId(irClass)
+            else -> context.globalHierarchyClassIdInterval(irClass).classIdLo
+        }
 
-            if (irClass.isInterface) return irClass.backupInterfaceId
-            return 0
+    /**
+     * The id of this interface as this compilation knows it: the one the hierarchy analysis assigned, or a hash
+     * of the name where there is no analysis to ask.
+     * It is a key for the structures of this compilation alone e.g. the devirtualization analysis, which never outlives it.
+     * Anything the rest of the program looks an interface up in goes through [emittedInterfaceId] instead.
+     */
+    val localInterfaceId: Int
+        get() {
+            require(irClass.isInterface) { "An interface expected but was ${irClass.name}" }
+            return if (context.hasGlobalHierarchyAnalysis()) context.globalHierarchyInterfaceId(irClass)
+            else irClass.backupInterfaceId
+        }
+
+    /**
+     * [localInterfaceId], for the emitted data.
+     * Only for global optimizations. In the presence of caches, the final link does a different layout
+     * and runtime reads the ids from auxiliary structures.
+     */
+    val emittedInterfaceId: Int
+        get() {
+            context.requireOwnsInterfaceNumbering { "The id of the interface ${irClass.render()}" }
+            return localInterfaceId
         }
 
     fun itablePlace(function: IrSimpleFunction): InterfaceTablePlace {
@@ -264,7 +290,7 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: NativeBacke
         val interfaceVTable = interfaceVTableEntries
         val index = interfaceVTable.indexOf(function)
         if (index >= 0)
-            return InterfaceTablePlace(irClass, classId, interfaceVTable.size, index)
+            return InterfaceTablePlace(irClass, localInterfaceId, interfaceVTable.size, index)
         val superFunction = function.overriddenSymbols.first().owner
         return context.getLayoutBuilder(superFunction.parentAsClass).itablePlace(superFunction)
     }

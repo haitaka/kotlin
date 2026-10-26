@@ -5,13 +5,14 @@
 
 package org.jetbrains.kotlin.backend.konan.llvm
 
+import llvm.LLVMSetVisibility
 import llvm.LLVMTypeRef
+import llvm.LLVMVisibility
 import org.jetbrains.kotlin.backend.konan.NativeBackendContext
 import org.jetbrains.kotlin.backend.konan.ir.getSuperClassNotAny
 import org.jetbrains.kotlin.backend.konan.ir.isAbstract
 import org.jetbrains.kotlin.backend.konan.isCache
 import org.jetbrains.kotlin.backend.konan.llvm.KonanBinaryInterface.classHierarchyIdsSymbolName
-import org.jetbrains.kotlin.backend.konan.llvm.KonanBinaryInterface.interfaceIdSymbolName
 import org.jetbrains.kotlin.backend.konan.serialization.SerializedClassHierarchy
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.declarations.IrClass
@@ -23,6 +24,7 @@ import org.jetbrains.kotlin.ir.util.isInterface
 import org.jetbrains.kotlin.ir.visitors.IrVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
+import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 
 /**
  * The class hierarchy of the whole program, assembled from the pieces the separate compilations contributed:
@@ -57,10 +59,16 @@ class ClassHierarchy(records: List<SerializedClassHierarchy>, anyName: String) {
     }
 
     init {
-        val entriesByName = records.associateBy(
-                { it.className },
-                { ClassEntry(it.className, it.isInterface, it.interfaceVTableSize, it.hasInterfaceLookupTable) }
-        ).toMutableMap()
+        val entriesByName = mutableMapOf<String, ClassEntry>()
+        for (record in records) {
+            // Two classes of the program can still carry the same name: one declared in two libraries has the same
+            // qualified name in both, and the name is all the pieces are stitched together by, so the two inevitably
+            // become one entry here and share the ids. Telling them apart needs the name to carry the identity of the
+            // library as well, which is what KT-81760 is about; until then the first record of a name wins.
+            if (record.className in entriesByName) continue
+            entriesByName[record.className] =
+                    ClassEntry(record.className, record.isInterface, record.interfaceVTableSize, record.hasInterfaceLookupTable)
+        }
 
         // Any is never recorded as a superclass, so it is materialized here instead, and every class
         // that has no superclass of its own ends up inheriting from it. Interfaces stay parentless.
@@ -259,6 +267,22 @@ internal class InterfaceTableEntry(
         val vtableSize: Int,
 )
 
+/**
+ * Keeps the hierarchy symbol [symbolName] out of the dynamic symbol table.
+ *
+ * The hierarchy globals are exported, so that the caches and the compilation laying the hierarchy out can refer
+ * to each other's, and `llvm.used` keeps them from being stripped - which also exempts them from
+ * [makeVisibilityHiddenLikeLlvmInternalizePass].
+ * Were they left visible, they would leak out of every framework, and two frameworks loaded into one process
+ * would clash over them.
+ * Dynamic caches, which resolve them across a dynamic library boundary, are the one case that needs them visible.
+ */
+internal fun ContextUtils.hideGlobalHierarchySymbol(symbolName: String) {
+    if (context.config.produce == CompilerOutputKind.DYNAMIC_CACHE || context.config.cachedLibraries.hasDynamicCaches) return
+    val global = staticData.getGlobal(symbolName) ?: return
+    LLVMSetVisibility(global.llvmGlobal, LLVMVisibility.LLVMHiddenVisibility)
+}
+
 internal val NativeBackendContext.hierarchyWillBeLaidOutByFinalLink: Boolean
     get() = shouldOptimize() && with(config.cachedLibraries) {
         config.produce.isCache || hasStaticCaches || hasDynamicCaches
@@ -269,6 +293,13 @@ internal fun NativeBackendContext.globalHierarchyInterfaceId(irClass: IrClass): 
 
 internal fun NativeBackendContext.globalHierarchyClassIdInterval(irClass: IrClass): ClassIdInterval =
         globalHierarchyAnalysisResult.classIds.getValue(irClass.crossModuleName())
+
+internal fun NativeBackendContext.requireOwnsInterfaceNumbering(what: () -> String) {
+    require(hasGlobalHierarchyAnalysis() || !hierarchyWillBeLaidOutByFinalLink) {
+        "${what()} is laid out by the interface ids, which the compilation producing the final binary assigns, " +
+                "so this compilation cannot emit it"
+    }
+}
 
 /** The id of an interface where there is no numbering to take one from (e.g. in debug builds); the runtime compares these hashes. */
 internal val IrClass.backupInterfaceId: Int
@@ -324,20 +355,21 @@ internal fun ContextUtils.createGlobalHierarchyStructures() {
         global.setInitializer(initializer)
         global.setConstant(true)
         llvm.usedGlobals += global.llvmGlobal
+        hideGlobalHierarchySymbol(symbolName)
     }
 
+    fun emitNumbering(name: String, low: Int, high: Int) = emitConstant(
+            classHierarchyIdsSymbolName(name),
+            runtime.classHierarchyIdsType,
+            Struct(runtime.classHierarchyIdsType, llvm.constInt32(low), llvm.constInt32(high))
+    )
+
     for ([className, interval] in result.classIds) {
-        emitConstant(
-                classHierarchyIdsSymbolName(className),
-                runtime.classHierarchyIdsType,
-                Struct(
-                        runtime.classHierarchyIdsType,
-                        llvm.constInt32(interval.classIdLo), llvm.constInt32(interval.classIdHi)
-                )
-        )
+        emitNumbering(className, interval.classIdLo, interval.classIdHi)
     }
     for ([interfaceName, info] in result.interfaces) {
-        emitConstant(interfaceIdSymbolName(interfaceName), llvm.int32Type, llvm.constInt32(info.id))
+        // An interface has a single id rather than an interval
+        emitNumbering(interfaceName, info.id, info.id)
     }
     result.implementedInterfaces.forEach { [className, interfaceNames] ->
         createInterfaceLookupTable(className, interfaceNames.map { name ->

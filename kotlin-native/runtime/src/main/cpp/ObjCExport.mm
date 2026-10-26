@@ -928,7 +928,7 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
       if (adapter->vtableIndex != -1) vtable[adapter->vtableIndex] = adapter->kotlinImpl;
 
       if (adapter->itableIndex != -1 && superITable != nullptr)
-        addToITable(adapter->interfaceId, adapter->itableIndex, adapter->kotlinImpl);
+        addToITable(adapter->interfaceId->interfaceId(), adapter->itableIndex, adapter->kotlinImpl);
     }
   }
 
@@ -941,7 +941,7 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
 
     if (superITable != nullptr) {
       // The interface vtable has to be created always in order for type checks to work.
-      addITable(typeInfo->classId_, typeAdapter->kotlinItableSize);
+      addITable(typeInfo->interfaceId(), typeAdapter->kotlinItableSize);
     }
 
     for (int i = 0; i < typeAdapter->reverseAdapterNum; ++i) {
@@ -953,7 +953,7 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
 
       if (adapter->itableIndex != -1 && superITable != nullptr) {
         // In general, [adapter->interfaceId] might not be equal to [typeInfo->classId_].
-        auto interfaceId = adapter->interfaceId;
+        auto interfaceId = adapter->interfaceId->interfaceId();
         addITable(interfaceId, adapter->itableSize);
         addToITable(interfaceId, adapter->itableIndex, adapter->kotlinImpl);
       }

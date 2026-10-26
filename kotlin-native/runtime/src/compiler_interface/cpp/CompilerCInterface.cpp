@@ -54,6 +54,7 @@ touchFunction(SetCurrentFrame)
 touchFunction(CheckCurrentFrame)
 
 touchFunction(LookupInterfaceTableRecord)
+touchFunction(Kotlin_layOutInterfaceTable)
 touchFunction(IsSubtype)
 touchFunction(IsSubclassFast)
 touchFunction(IsSubclassFastIndirect)
