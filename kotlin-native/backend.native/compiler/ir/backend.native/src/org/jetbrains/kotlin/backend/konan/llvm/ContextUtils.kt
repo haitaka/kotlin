@@ -645,7 +645,21 @@ internal class CodegenLlvmHelpers(private val generationState: NativeGenerationS
     }
 }
 
-class IrStaticInitializer(val konanLibrary: KotlinLibrary?, val runtimeInitializer: RuntimeInitializer)
+/**
+ * Whose code a startup initializer belongs to, and so which constructor is to call it. Every piece of the binary
+ * belongs to exactly one of the two: the libraries it was linked from, and the module this compilation produces.
+ */
+sealed interface InitializerOwner {
+    data class Library(val library: KotlinLibrary) : InitializerOwner
+    data object CurrentModule : InitializerOwner
+
+    companion object {
+        /** see `IrModuleFragment.kotlinLibrary` */
+        fun of(konanLibrary: KotlinLibrary?): InitializerOwner = konanLibrary?.let(::Library) ?: CurrentModule
+    }
+}
+
+class IrStaticInitializer(val owner: InitializerOwner, val runtimeInitializer: RuntimeInitializer)
 
 /**
  * Function of the [CodeGeneratorVisitor.kInitFuncType] type (aka `Initializer` in `Runtime.h`).

@@ -38,7 +38,6 @@ import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.konan.ForeignExceptionMode
 import org.jetbrains.kotlin.konan.target.CompilerOutputKind
 import org.jetbrains.kotlin.konan.target.Family
-import org.jetbrains.kotlin.library.KotlinLibrary
 import org.jetbrains.kotlin.library.uniqueName
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.utils.addToStdlib.ifTrue
@@ -329,13 +328,13 @@ internal class CodeGeneratorVisitor(
         CAdapterCodegen(codegen, generationState).buildAllAdaptersRecursively(elements)
     }
 
-    private fun runAndProcessInitializers(konanLibrary: KotlinLibrary?, f: () -> Unit) {
+    private fun runAndProcessInitializers(owner: InitializerOwner, f: () -> Unit) {
         val oldScopeState = llvm.initializersGenerationState.reset(ScopeInitializersGenerationState())
         f()
         val scopeState = llvm.initializersGenerationState.reset(oldScopeState)
         scopeState.takeIf { !it.isEmpty() }?.let {
             val runtimeInitializer = createInitBody(it)
-            llvm.irStaticInitializers.add(IrStaticInitializer(konanLibrary, runtimeInitializer))
+            llvm.irStaticInitializers.add(IrStaticInitializer(owner, runtimeInitializer))
         }
     }
 
@@ -352,7 +351,7 @@ internal class CodeGeneratorVisitor(
         initializeCachedBoxes(generationState)
         declaration.acceptChildrenVoid(this)
 
-        runAndProcessInitializers(null) {
+        runAndProcessInitializers(InitializerOwner.CurrentModule) {
             // Note: has to be before `objCExport.generate` below, which is what emits the adapter tables,
             // and after all the files were visited, so that the bindings of this binary take precedence.
             codegen.emitBindClassToObjCNameAdaptersFromCaches()
@@ -484,7 +483,7 @@ internal class CodeGeneratorVisitor(
     override fun visitFile(declaration: IrFile) {
         @Suppress("UNCHECKED_CAST")
         using(FileScope(declaration, declaration.fileEntry)) {
-            runAndProcessInitializers(declaration.module.kotlinLibrary) {
+            runAndProcessInitializers(InitializerOwner.of(declaration.module.kotlinLibrary)) {
                 declaration.acceptChildrenVoid(this)
                 codegen.processBindClassToObjCNameAnnotations(declaration)
             }
@@ -828,7 +827,7 @@ internal class CodeGeneratorVisitor(
             }
 
             using(ClassScope(declaration)) {
-                runAndProcessInitializers(declaration.moduleFragment.kotlinLibrary) {
+                runAndProcessInitializers(InitializerOwner.of(declaration.moduleFragment.kotlinLibrary)) {
                     declaration.declarations.forEach {
                         it.acceptVoid(this)
                     }
@@ -2757,14 +2756,15 @@ internal class CodeGeneratorVisitor(
     //-------------------------------------------------------------------------//
     fun appendStaticInitializers() {
         // Note: the list of libraries is topologically sorted (in order for initializers to be called correctly).
-        val dependencies = (generationState.dependenciesTracker.allBitcodeDependencies + listOf(null)/* Null for "current" non-library module */)
+        val dependencies = generationState.dependenciesTracker.allBitcodeDependencies
 
-        val libraryToInitializers = dependencies.associate { it?.library to mutableListOf<RuntimeInitializer>() }
+        // The initializers each constructor is to call, one list per owner.
+        val initializersOf = (dependencies.map { InitializerOwner.Library(it.library) } + InitializerOwner.CurrentModule)
+                .associateWith { mutableListOf<RuntimeInitializer>() }
 
         llvm.irStaticInitializers.forEach {
-            val library = it.konanLibrary
-            val initializers = libraryToInitializers[library]
-                    ?: error("initializer for not included library ${library?.path}")
+            val initializers = initializersOf[it.owner]
+                    ?: error("initializer for not included library ${(it.owner as InitializerOwner.Library).library.path}")
 
             initializers.add(it.runtimeInitializer)
         }
@@ -2775,34 +2775,30 @@ internal class CodeGeneratorVisitor(
             return ctorFunctionSignature.toProto(ctorName, null, LLVMLinkage.LLVMExternalLinkage)
         }
 
-        val ctorFunctions = dependencies.flatMap { dependency ->
-            val library = dependency?.library
-            val initializer = mergeRuntimeInitializers(libraryToInitializers.getValue(library))
-                    ?.let { createInitCtor(createInitNode(it)) }
+        fun ctorFunction(owner: InitializerOwner, ctorName: String): LlvmCallable {
+            val initializer = mergeRuntimeInitializers(initializersOf.getValue(owner))?.let {
+                createInitCtor(createInitNode(it))
+            }
+            // The bitcode this compilation synthesized belongs to the module, not to any of the libraries.
+            val otherInitializers = llvm.otherStaticInitializers.takeIf { owner == InitializerOwner.CurrentModule }.orEmpty()
+            return appendStaticInitializers(ctorProto(ctorName), listOfNotNull(initializer) + otherInitializers)
+        }
 
-            val ctorName = when {
-                // TODO: Try to not use moduleId.
-                library == null -> when {
-                    !context.config.produce.isCache -> context.config.moduleId.moduleConstructorName
-                    context.config.producePerFileCache && generationState.cacheInfo != null ->
-                        fileCtorName(generationState.cacheInfo.klib.uniqueName, generationState.outputFiles.cacheFileName)
-                    else -> generationState.outputFiles.cacheFileName.moduleConstructorName
-                }
-                library == generationState.cacheInfo?.klib
-                        && context.config.producePerFileCache ->
-                    fileCtorName(library.uniqueName, generationState.outputFiles.perFileCacheFileName)
-                else -> library.moduleConstructorName
+        val libraryCtorFunctions = dependencies.flatMap { dependency ->
+            val library = dependency.library
+            val initializerOwner = InitializerOwner.Library(library)
+
+            val ctorName = if (library == generationState.cacheInfo?.klib && context.config.producePerFileCache) {
+                fileCtorName(library.uniqueName, generationState.outputFiles.perFileCacheFileName)
+            } else {
+                library.moduleConstructorName
             }
 
-            if (library == null || generationState.llvmModuleSpecification.containsLibrary(library)) {
-                val otherInitializers = llvm.otherStaticInitializers.takeIf { library == null }.orEmpty()
-
-                listOf(
-                    appendStaticInitializers(ctorProto(ctorName), listOfNotNull(initializer) + otherInitializers)
-                )
+            if (generationState.llvmModuleSpecification.containsLibrary(library)) {
+                listOf(ctorFunction(initializerOwner, ctorName))
             } else {
                 // A cached library.
-                check(initializer == null) {
+                check(initializersOf.getValue(initializerOwner).isEmpty()) {
                     "found initializer from ${library.path}, which is not included into compilation"
                 }
 
@@ -2830,7 +2826,18 @@ internal class CodeGeneratorVisitor(
             }
         }
 
-        appendGlobalCtors(ctorFunctions)
+        val currentModuleCtorFunction = ctorFunction(
+                InitializerOwner.CurrentModule,
+                when {
+                    // TODO: Try to not use moduleId.
+                    !context.config.produce.isCache -> context.config.moduleId.moduleConstructorName
+                    context.config.producePerFileCache && generationState.cacheInfo != null ->
+                        fileCtorName(generationState.cacheInfo.klib.uniqueName, generationState.outputFiles.cacheFileName)
+                    else -> generationState.outputFiles.cacheFileName.moduleConstructorName
+                },
+        )
+
+        appendGlobalCtors(libraryCtorFunctions + currentModuleCtorFunction)
     }
 
     private fun appendStaticInitializers(ctorCallableProto: LlvmFunctionProto, initializers: List<LlvmCallable>) : LlvmCallable {
