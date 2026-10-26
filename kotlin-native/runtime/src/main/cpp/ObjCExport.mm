@@ -654,8 +654,10 @@ static void buildITable(TypeInfo* result, const std::map<ClassId, std::vector<VT
     itableSize = interfaceVTables.size();
 
   auto itable_ = konanAllocArray<InterfaceTableRecord>(itableSize);
-  result->interfaceTable_ = itable_;
-  result->interfaceTableSize_ = useFastITable ? itableSize - 1 : -itableSize;
+  auto table = konanAllocArray<InterfaceTable>(1);
+  table->size_ = useFastITable ? itableSize - 1 : -itableSize;
+  table->records_ = itable_;
+  result->interfaceTable_ = table;
 
   if (useFastITable) {
     for (auto& pair : interfaceVTables) {
@@ -727,6 +729,7 @@ static const TypeInfo* createTypeInfo(
   }
 
   result->classId_ = superType->classId_;
+  result->classHierarchyIds_ = superType->classHierarchyIds_;
 
   std::vector<const TypeInfo*> implementedInterfaces(
     superType->implementedInterfaces_, superType->implementedInterfaces_ + superType->implementedInterfacesCount_
@@ -748,8 +751,10 @@ static const TypeInfo* createTypeInfo(
   result->implementedInterfacesCount_ = implementedInterfaces.size();
   if (superItable != nullptr) {
     if (itableEqualsSuper) {
-      result->interfaceTableSize_ = superItableSize;
-      result->interfaceTable_ = superItable;
+      auto table = konanAllocArray<InterfaceTable>(1);
+      table->size_ = superItableSize;
+      table->records_ = superItable;
+      result->interfaceTable_ = table;
     } else {
       buildITable(result, interfaceVTables);
     }
@@ -872,9 +877,9 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
         superVtable + superVtableSize
   );
 
-  if (superITable == nullptr) {
-    superITable = superType->interfaceTable_;
-    superITableSize = superType->interfaceTableSize_;
+  if (superITable == nullptr && superType->interfaceTable_ != nullptr) {
+    superITable = superType->interfaceTable_->records_;
+    superITableSize = superType->interfaceTable_->size_;
   }
   std::map<ClassId, std::vector<VTableElement>> interfaceVTables;
   if (superITable != nullptr) {
@@ -938,8 +943,10 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
       itableEqualsSuper = false;
       if (adapter->vtableIndex != -1) vtable[adapter->vtableIndex] = adapter->kotlinImpl;
 
-      if (adapter->itableIndex != -1 && superITable != nullptr)
-        addToITable(adapter->interfaceId, adapter->itableIndex, adapter->kotlinImpl);
+      if (adapter->itableIndex != -1 && superITable != nullptr) {
+        RuntimeAssert(adapter->interfaceId != nullptr, "A method dispatched through an itable must name its interface");
+        addToITable(adapter->interfaceId->interfaceId(), adapter->itableIndex, adapter->kotlinImpl);
+      }
     }
   };
 
@@ -970,7 +977,7 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
 
     if (superITable != nullptr) {
       // The interface vtable has to be created always in order for type checks to work.
-      addITable(typeInfo->classId_, typeAdapter->kotlinItableSize);
+      addITable(typeInfo->interfaceId(), typeAdapter->kotlinItableSize);
     }
 
     for (int i = 0; i < typeAdapter->reverseAdapterNum; ++i) {
@@ -982,7 +989,8 @@ static const TypeInfo* createTypeInfo(Class clazz, const TypeInfo* superType, co
 
       if (adapter->itableIndex != -1 && superITable != nullptr) {
         // In general, [adapter->interfaceId] might not be equal to [typeInfo->classId_].
-        auto interfaceId = adapter->interfaceId;
+        RuntimeAssert(adapter->interfaceId != nullptr, "A method dispatched through an itable must name its interface");
+        auto interfaceId = adapter->interfaceId->interfaceId();
         addITable(interfaceId, adapter->itableSize);
         addToITable(interfaceId, adapter->itableIndex, adapter->kotlinImpl);
       }
