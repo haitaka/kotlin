@@ -1031,6 +1031,7 @@ public abstract class org/jetbrains/kotlin/gradle/plugin/mpp/NativeBinary : org/
 	public final fun getBuildType ()Lorg/jetbrains/kotlin/gradle/plugin/mpp/NativeBuildType;
 	public final fun getCompilation ()Lorg/jetbrains/kotlin/gradle/plugin/mpp/KotlinNativeCompilation;
 	public final fun getDebuggable ()Z
+	public final fun getEnableNativeCacheForOptimizedBuilds ()Z
 	public final fun getFreeCompilerArgs ()Ljava/util/List;
 	public final fun getLinkTask ()Lorg/jetbrains/kotlin/gradle/tasks/KotlinNativeLink;
 	public final fun getLinkTaskName ()Ljava/lang/String;
@@ -1050,6 +1051,7 @@ public abstract class org/jetbrains/kotlin/gradle/plugin/mpp/NativeBinary : org/
 	public final fun setBinaryOptions (Ljava/util/Map;)V
 	public final fun setCompilation (Lorg/jetbrains/kotlin/gradle/plugin/mpp/KotlinNativeCompilation;)V
 	public final fun setDebuggable (Z)V
+	public final fun setEnableNativeCacheForOptimizedBuilds (Z)V
 	public final fun setFreeCompilerArgs (Ljava/util/List;)V
 	public final fun setLinkerOpts (Ljava/util/List;)V
 	public final fun setOptimized (Z)V

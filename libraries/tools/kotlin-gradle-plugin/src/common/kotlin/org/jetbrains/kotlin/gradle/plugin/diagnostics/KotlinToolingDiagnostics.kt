@@ -565,6 +565,47 @@ internal object KotlinToolingDiagnostics {
         }
     }
 
+    internal object NativeCacheConflictingConfigurationDiagnostic : ToolingDiagnosticFactory(WARNING, DiagnosticGroup.Kgp.Misconfiguration) {
+        operator fun invoke(
+            buildType: String,
+            binaryName: String,
+        ) = build {
+            title("Conflicting Kotlin/Native cache configuration for $buildType binary '$binaryName'")
+                .description {
+                    """
+                    Both `disableNativeCache` and `enableNativeCacheForOptimizedBuilds` are configured for the $buildType binary '$binaryName'.
+                    The version-pinned `disableNativeCache` takes precedence when it applies to the current Kotlin version;
+                    otherwise compiler caches will be used when linking the binary with optimizations enabled.
+                    """.trimIndent()
+                }
+                .solution {
+                    "Remove either the `disableNativeCache` call or the `enableNativeCacheForOptimizedBuilds` setting for the '$binaryName' binary."
+                }
+                .documentationLink(URI("https://kotl.in/disable-native-cache"))
+        }
+    }
+
+    internal object NativeCacheUnsupportedTargetDiagnostic : ToolingDiagnosticFactory(WARNING, DiagnosticGroup.Kgp.Misconfiguration) {
+        operator fun invoke(
+            buildType: String,
+            binaryName: String,
+            targetName: String,
+            hostName: String,
+        ) = build {
+            title("Kotlin/Native cache is not supported for $buildType binary '$binaryName' on target '$targetName'")
+                .description {
+                    """
+                    `enableNativeCacheForOptimizedBuilds` is enabled for the $buildType binary '$binaryName',
+                    but caching is not supported for target '$targetName' on the current host '$hostName'.
+                    """.trimIndent()
+                }
+                .solution {
+                    "Remove the `enableNativeCacheForOptimizedBuilds` setting for the '$binaryName' binary, as it has no effect."
+                }
+                .documentationLink(URI("https://kotl.in/disable-native-cache"))
+        }
+    }
+
     object OldNativeVersionDiagnostic : ToolingDiagnosticFactory(WARNING, DiagnosticGroup.Kgp.Misconfiguration) {
         operator fun invoke(nativeVersion: KotlinToolingVersion?, kotlinVersion: KotlinToolingVersion) = build {
             title("Kotlin/Native and Kotlin Versions Incompatible")

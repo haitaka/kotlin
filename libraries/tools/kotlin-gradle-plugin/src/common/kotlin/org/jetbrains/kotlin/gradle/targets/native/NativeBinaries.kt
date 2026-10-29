@@ -64,6 +64,15 @@ sealed class NativeBinary(
     var debuggable: Boolean = buildType.debuggable
     var optimized: Boolean = buildType.optimized
 
+    /**
+     * When `true`, compiler caches will be built and used when linking this binary with optimizations enabled
+     * (see [optimized]), e.g. in release builds. Caches of optimized builds do not affect non-optimized ones and vice versa.
+     *
+     * The setting has no effect on binaries that are not linked with optimizations and on targets that do not support caching.
+     * An explicit [disableNativeCache] call takes precedence over it.
+     */
+    var enableNativeCacheForOptimizedBuilds: Boolean = false
+
     /** Additional options passed to the linker by the Kotlin/Native compiler. */
     var linkerOpts: MutableList<String> = mutableListOf()
 

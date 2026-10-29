@@ -6208,6 +6208,7 @@ public abstract class org/jetbrains/kotlin/gradle/tasks/KotlinNativeLink : org/j
 	public final fun getCompilerPluginOptions ()Lorg/jetbrains/kotlin/gradle/tasks/CompilerPluginOptions;
 	public final fun getDebuggable ()Z
 	public fun getDestinationDirectory ()Lorg/gradle/api/file/DirectoryProperty;
+	public final fun getEnableNativeCacheForOptimizedBuilds ()Z
 	public final fun getEntryPoint ()Ljava/lang/String;
 	public final fun getExportKdoc ()Lorg/gradle/api/provider/Provider;
 	public final fun getExportLibraries ()Lorg/gradle/api/file/FileCollection;

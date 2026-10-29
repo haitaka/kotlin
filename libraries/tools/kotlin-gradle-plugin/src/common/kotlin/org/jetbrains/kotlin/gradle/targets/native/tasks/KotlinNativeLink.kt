@@ -132,6 +132,19 @@ constructor(
     @get:Input
     val debuggable: Boolean by lazyConvention { binary.debuggable }
 
+    /**
+     * Whether compiler caches should be built and used when linking this binary with optimizations enabled.
+     * Enabled either per binary via [NativeBinary.enableNativeCacheForOptimizedBuilds]
+     * or project-wide via the `kotlin.internal.native.enableReleaseBinaryCache` Gradle property.
+     */
+    @get:Input
+    val enableNativeCacheForOptimizedBuilds: Boolean by lazyConvention {
+        binary.enableNativeCacheForOptimizedBuilds || PropertiesProvider(project).nativeEnableReleaseBinaryCache
+    }
+
+    @get:Internal
+    internal val binaryEnableNativeCacheForOptimizedBuilds: Provider<Boolean> = lazyConvention { binary.enableNativeCacheForOptimizedBuilds }
+
     @get:Input
     val baseName: String by lazyConvention { binary.baseName }
 
@@ -250,7 +263,14 @@ constructor(
     internal abstract val linkerOptionsProducerFingerprint: ConfigurableFileCollection
 
     @get:Input
-    val binaryOptions: Map<String, String> by lazy { PropertiesProvider(project).nativeBinaryOptions + binary.binaryOptions }
+    val binaryOptions: Map<String, String> by lazy {
+        val options = PropertiesProvider(project).nativeBinaryOptions + binary.binaryOptions
+        if (optimized && enableNativeCacheForOptimizedBuilds && !disableCache.get()) {
+            options + (ENABLE_RELEASE_BINARY_CACHE_BINARY_OPTION to "true")
+        } else {
+            options
+        }
+    }
 
     @get:Input
     val processTests: Boolean by lazyConvention { binary is TestExecutable }
@@ -290,7 +310,6 @@ constructor(
         val threads: Int,
         val gradleUserHomeDir: File,
         val gradleBuildDir: File,
-        val enabledWithOptimizations: Boolean,
     )
 
     private val cacheSettings = CacheSettings(
@@ -298,7 +317,6 @@ constructor(
         project.getKonanParallelThreads(),
         project.gradle.gradleUserHomeDir,
         project.layout.buildDirectory.get().asFile,
-        PropertiesProvider(project).nativeEnableReleaseBinaryCache,
     )
 
     override fun createCompilerArguments(context: CreateCompilerArgumentsContext) = context.create<K2NativeCompilerArguments> {
@@ -424,6 +442,27 @@ constructor(
         }
     }
 
+    private fun validateEnabledNativeCache() {
+        if (!binaryEnableNativeCacheForOptimizedBuilds.get()) return
+        if (hasDisabledNativeCache) {
+            reportDiagnostic(
+                KotlinToolingDiagnostics.NativeCacheConflictingConfigurationDiagnostic(
+                    binaryBuildType.get(),
+                    binaryName.get(),
+                )
+            )
+        } else if (!konanPropertiesService.get().cacheWorksFor(konanTarget)) {
+            reportDiagnostic(
+                KotlinToolingDiagnostics.NativeCacheUnsupportedTargetDiagnostic(
+                    binaryBuildType.get(),
+                    binaryName.get(),
+                    konanTarget.visibleName,
+                    HostManager.platformName()
+                )
+            )
+        }
+    }
+
     @Suppress("DEPRECATION_ERROR")
     @get:Classpath
     @get:NormalizeLineEndings
@@ -500,6 +539,7 @@ constructor(
         addBuildMetricsForTaskAction(metricsReporter = metricsReporter, languageVersion = null) {
             validateBinaryConfiguration()
             validateDisabledNativeCache()
+            validateEnabledNativeCache()
             validatedExportedLibraries()
 
             val output = outputFile.get()
@@ -508,7 +548,7 @@ constructor(
             val additionalOptions = mutableListOf<String>().apply {
                 addAll(externalDependenciesBuildCompilerArgs.get())
                 if (konanCacheKind.get() != NativeCacheKind.NONE
-                    && (!optimized || cacheSettings.enabledWithOptimizations)
+                    && (!optimized || enableNativeCacheForOptimizedBuilds)
                     && konanPropertiesService.get().cacheWorksFor(konanTarget)
                 ) {
                     add("-Xauto-cache-from=${cacheSettings.gradleUserHomeDir}")
@@ -548,6 +588,8 @@ constructor(
 }
 
 internal val String.asValidFrameworkName get() = replace('-', '_')
+
+private const val ENABLE_RELEASE_BINARY_CACHE_BINARY_OPTION = "enableReleaseBinaryCache"
 
 private val KotlinNativeLink.hasDisabledNativeCache get() = disableCacheSettings.get().isNotEmpty()
 private val KotlinNativeLink.hasIncompatibleConfiguration get() = (debuggable && optimized) || (!debuggable && !optimized)
