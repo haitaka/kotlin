@@ -107,7 +107,7 @@ open class KonanCacheTask @Inject constructor(
             )
 
     @get:Input
-    val kt89897workaround: Property<Boolean> = objectFactory.property(Boolean::class.java)
+    val kt89897workaround: Property<Boolean> = objectFactory.property(Boolean::class.java).convention(false)
 
     @get:InputFile
     @get:PathSensitive(PathSensitivity.NONE)
