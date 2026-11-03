@@ -89,6 +89,7 @@ internal class RTTIGenerator(
             interfaces: ConstValue,
             interfacesCount: Int,
             interfaceTableSize: Int,
+            interfaceTableRecords: ConstValue?,
             interfaceTable: ConstValue,
             packageName: String?,
             relativeName: String?,
@@ -121,6 +122,8 @@ internal class RTTIGenerator(
                     llvm.constInt32(interfacesCount),
 
                     llvm.constInt32(interfaceTableSize),
+                    interfaceTableRecords,
+
                     interfaceTable,
 
                     kotlinStringLiteral(packageName),
@@ -236,8 +239,26 @@ internal class RTTIGenerator(
         } else {
             Pair(emptyList(), -1)
         }
-        val interfaceTablePtr = staticData.placeGlobalConstArray("kifacetable:$className",
-                runtime.interfaceTableRecordType, interfaceTable)
+
+        // Every TypeInfo of a binary refers to its table the same way (see getInterfaceTableRecord):
+        // when caches take part in the produced binary, the table is a global of `{ size, records[] }`
+        // shape the `interfaceTable_` field points into, and the plain fields of the TypeInfo stay
+        // empty. Otherwise the records are a global of their own, and the TypeInfo stores the size
+        // and their pointer plainly.
+        val interfaceTableRecordsPtr: ConstPointer
+        val interfaceTablePtr: ConstPointer
+        if (context.usesIndirectInterfaceTables && needInterfaceTable) {
+            interfaceTableRecordsPtr = llvm.nullPointer
+            val tableType = llvm.structType(llvm.int32Type, LLVMArrayType(runtime.interfaceTableRecordType, interfaceTable.size)!!)
+            interfaceTablePtr = staticData.placeGlobal("kifacetable:$className",
+                    Struct(tableType, llvm.constInt32(interfaceTableSize), ConstArray(runtime.interfaceTableRecordType, interfaceTable)))
+                .also { it.setConstant(true) }
+                .pointer.getElementPtr(llvm, tableType, 0)
+        } else {
+            interfaceTableRecordsPtr = staticData.placeGlobalConstArray("kifacetable:$className",
+                    runtime.interfaceTableRecordType, interfaceTable)
+            interfaceTablePtr = llvm.nullPointer
+        }
 
         val reflectionInfo = getReflectionInfo(irClass)
         val typeInfoGlobal = llvmDeclarations.typeInfoGlobal
@@ -248,7 +269,7 @@ internal class RTTIGenerator(
                 superType,
                 objOffsetsPtr, objOffsetsCount,
                 interfacesPtr, interfaces.size,
-                interfaceTableSize, interfaceTablePtr,
+                interfaceTableSize, interfaceTableRecordsPtr, interfaceTablePtr,
                 reflectionInfo.packageName,
                 reflectionInfo.relativeName,
                 flagsFromClass(irClass) or reflectionInfo.reflectionFlags,
@@ -502,7 +523,22 @@ internal class RTTIGenerator(
                 )
             }
         }
-        val interfaceTablePtr = staticData.placeGlobalConstArray("", runtime.interfaceTableRecordType, interfaceTable)
+        // Same split as in generate(): indirect tables when caches take part in the binary,
+        // plain pair otherwise. The synthetic implementations are not known to the compilation
+        // producing the final binary by name, so their tables are not re-laid out there (KT-87320).
+        val interfaceTableRecordsPtr: ConstPointer
+        val interfaceTablePtr: ConstPointer
+        if (context.usesIndirectInterfaceTables) {
+            interfaceTableRecordsPtr = llvm.nullPointer
+            val tableType = llvm.structType(llvm.int32Type, LLVMArrayType(runtime.interfaceTableRecordType, interfaceTable.size)!!)
+            interfaceTablePtr = staticData.placeGlobal("",
+                    Struct(tableType, llvm.constInt32(interfaceTableSize), ConstArray(runtime.interfaceTableRecordType, interfaceTable)))
+                .also { it.setConstant(true) }
+                .pointer.getElementPtr(llvm, tableType, 0)
+        } else {
+            interfaceTableRecordsPtr = staticData.placeGlobalConstArray("", runtime.interfaceTableRecordType, interfaceTable)
+            interfaceTablePtr = llvm.nullPointer
+        }
 
         val typeInfoWithVtable = llvm.struct(TypeInfo(
                 selfPtr = result,
@@ -511,7 +547,8 @@ internal class RTTIGenerator(
                 superType = superClass.typeInfoPtr,
                 objOffsets = objOffsetsPtr, objOffsetsCount = objOffsetsCount,
                 interfaces = interfacesPtr, interfacesCount = interfaces.size,
-                interfaceTableSize = interfaceTableSize, interfaceTable = interfaceTablePtr,
+                interfaceTableSize = interfaceTableSize, interfaceTableRecords = interfaceTableRecordsPtr,
+                interfaceTable = interfaceTablePtr,
                 packageName = ReflectionInfo.EMPTY.packageName,
                 relativeName = ReflectionInfo.EMPTY.relativeName,
                 flags = flagsFromClass(irClass) or (if (immutable) TF_IMMUTABLE else 0),
