@@ -165,7 +165,7 @@ fun BlockBody.replaceWithSubGraph(
 }
 
 context(_: ArgumentUpdater)
-fun Node.kill() {
+private fun Node.kill() {
     require(uses.isEmpty())
     args.withIndex().forEach { [index, _] -> args[index] = null }
     unwireFromGraphAndDeregister()
