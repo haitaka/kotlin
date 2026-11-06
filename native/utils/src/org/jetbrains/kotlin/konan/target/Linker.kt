@@ -120,7 +120,7 @@ class LinkerArguments(
     val kind: LinkerOutputKind,
     val outputDsymBundle: String,
     val sanitizer: SanitizerKind? = null,
-    val libtoolMallocZeroOnAlloc: Boolean = false,
+    val stabilizeLibtoolArchives: Boolean = false,
 )
 
 // TODO: This is for compatibility with CompileToExecutable.kt. Remove after advancing the bootstrap.
@@ -317,12 +317,11 @@ class MacOSBasedLinker(targetProperties: AppleConfigurables)
             require(sanitizer == null) {
                 "Sanitizers are unsupported"
             }
-
             // KT-89897: since Xcode 27, libtool leaves the padding of the `__.SYMDEF` name table uninitialized,
-            // which makes the produced archives not reproducible. `MallocZeroOnAlloc=1` makes libmalloc zero-fill
-            // the padding, so the output is reproducible again and identical to what Xcode 26.5 produces.
-            val environment = if (libtoolMallocZeroOnAlloc) mapOf("MallocZeroOnAlloc" to "1") else emptyMap()
-
+            // which makes the produced archives not reproducible. `MallocScribble=1` makes libmalloc fill every
+            // allocation with 0xAA, so the padding becomes deterministic (0xAA instead of garbage) and the same
+            // bytes are produced by Xcode 26.5 and Xcode 27.
+            val environment = if (stabilizeLibtoolArchives) mapOf("MallocScribble" to "1") else emptyMap()
             return listOf(Command(listOf(libtool), environment = environment).apply {
                 +"-D"
                 +"-static"
