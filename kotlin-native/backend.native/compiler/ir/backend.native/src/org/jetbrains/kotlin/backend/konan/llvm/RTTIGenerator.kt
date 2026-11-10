@@ -303,7 +303,25 @@ internal class RTTIGenerator(
             return Triple(size, recordsPtr, llvm.nullPointer)
         }
 
-        return Triple(0, llvm.nullPointer, constPointer(importGlobal(irClass.interfaceTableSymbolName, runtime.interfaceTableType)))
+        // Only the compilation that lays the whole-program hierarchy out knows the size the published
+        // table will take: it computes the same layout over the same ids, and the declaration carries
+        // the exact storage the initializer will need - a global cannot be initialized with a value
+        // of a different type. A cache sees none of that: nothing in its own bitcode looks into the
+        // table, so its declaration stays at the header type alone.
+        val tableType = if (context.hasGlobalHierarchyAnalysis()) {
+            val entries = irClass.implementedInterfaces.map { iface ->
+                InterfaceTableEntry(
+                        interfaceName = iface.crossModuleName(),
+                        interfaceId = context.getLayoutBuilder(iface).emittedInterfaceId,
+                        vtableSize = context.getLayoutBuilder(iface).interfaceVTableEntries.size,
+                )
+            }
+            val [slots, size] = layOutInterfaceLookupTable(entries) { it.interfaceId }
+            llvm.structType(llvm.int32Type, LLVMArrayType(runtime.interfaceTableRecordType, slots.size)!!)
+        } else {
+            runtime.interfaceTableType
+        }
+        return Triple(0, llvm.nullPointer, constPointer(importGlobal(irClass.interfaceTableSymbolName, tableType)))
     }
 
     /**
